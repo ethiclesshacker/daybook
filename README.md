@@ -83,7 +83,7 @@ credentials and the Supabase service-role key never leave your machine.
 - **Bundler:** [Vite](https://vite.dev/)
 - **Charts:** [Chart.js](https://www.chartjs.org/) + `chartjs-adapter-date-fns`
 - **Tables:** [Grid.js](https://gridjs.io/)
-- **Backend:** [Supabase](https://supabase.com/) — magic-link auth, Postgres, RLS
+- **Backend:** [Supabase](https://supabase.com/) — email-code (OTP) auth, Postgres, RLS
 - **Hosting:** Cloudflare Pages (direct upload via Wrangler)
 
 Chart.js, Grid.js, Font Awesome and Inter are all npm dependencies bundled through `src/vendor.js` — nothing loads from a CDN, which is what lets the production CSP stay at `default-src 'self'`.
@@ -221,7 +221,6 @@ Because the build happens locally, setting `VITE_SUPABASE_*` in the Cloudflare d
 ```
 src/
   main.js            entry point; auth state → render
-  auth-callback.js   snapshots magic-link params before supabase-js clears them
   supabase.js        client + getCurrentUserId
   settings.js        SETTINGS_SCHEMA, load/save, derived values
   constants.js       app-level config (card tiers, transfer partners)
