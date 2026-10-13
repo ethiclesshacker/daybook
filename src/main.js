@@ -1,6 +1,3 @@
-// NOTE: ./auth-callback.js must stay above ./supabase.js — it snapshots the
-// magic-link params out of the URL before supabase-js clears them.
-import { isAuthCallback, getAuthCallbackError, clearAuthParamsFromURL } from './auth-callback.js';
 import { supabase } from './supabase.js';
 import './vendor.js';
 import { loadSettings } from './settings.js';
@@ -32,8 +29,7 @@ async function render(session) {
     await loadSettings();
     renderApp(session);
   } else {
-    clearAuthParamsFromURL(); // don't bake a stale #route into the next magic link
-    renderLogin({ error: getAuthCallbackError() });
+    renderLogin();
   }
 }
 
@@ -45,20 +41,8 @@ async function init() {
   // delegated listener, because the production CSP refuses inline handlers.
   installCallListener();
 
-  // getSession() awaits the client's initialisation, which includes exchanging
-  // a magic-link token in the URL. On a callback load that means the session is
-  // already live here and we never flash the login screen.
   const { data: { session } } = await supabase.auth.getSession();
-
-  if (!session && isAuthCallback() && !getAuthCallbackError()) {
-    // Callback params were present but no session came out of them. Surface it
-    // rather than silently showing an empty login form.
-    renderedUserId = null;
-    clearAuthParamsFromURL();
-    renderLogin({ error: 'Could not complete sign-in from that link. Please request a new one.' });
-  } else {
-    await render(session);
-  }
+  await render(session);
 
   supabase.auth.onAuthStateChange((_event, session) => {
     // Never call back into supabase from inside this callback — it runs while

@@ -375,6 +375,24 @@ input, select, textarea {
   transform: none;
 }
 
+.login-alt-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+
+.login-link-btn {
+  min-height: var(--control-h);
+  padding: 0 var(--sp-1);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.login-link-btn:hover:not(:disabled) { color: var(--text-primary); }
+.login-link-btn:disabled { color: var(--text-faint); cursor: not-allowed; }
+
 .login-status {
   margin-top: 1rem;
   padding: 0.75rem 1rem;

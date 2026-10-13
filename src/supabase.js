@@ -18,7 +18,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: {
     persistSession:    true,  // store session in localStorage → survives page reloads & browser restarts
     autoRefreshToken:  true,  // silently refresh the access token before it expires
-    detectSessionInUrl: true, // pick up magic link tokens from the URL automatically
+    detectSessionInUrl: false, // sign-in is an email code typed into the page; nothing arrives in the URL
     storageKey: 'finance-hub-session', // namespaced key so it doesn't clash with other Supabase apps
   },
 });
