@@ -163,7 +163,9 @@ function describe(event) {
     at: event.occurred_at,
     type: event.type,
     subtype: event.subtype,
-    title: event.title,
+    // Extractor titles carry the receipt's paise ("Paakashala — ₹94.58"), which
+    // the prose then quoted; every screen shows whole rupees.
+    title: typeof event.title === 'string' ? event.title.replace(/(₹\s?[\d,]+)\.\d{1,2}\b/g, '$1') : event.title,
     // Whole rupees: the prose quoted "₹150.14" where every screen says ₹150.
     amount: Number.isFinite(Number(event.data?.amount)) ? Math.round(Number(event.data.amount)) : null,
     currency: event.data?.currency || null,
