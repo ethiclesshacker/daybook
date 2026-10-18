@@ -4098,3 +4098,140 @@ button.user-profile:focus-visible { outline: 2px solid var(--accent); outline-of
    at the far end of the wide table, and gave the whole page a horizontal
    scrollbar at tablet and phone widths. */
 .dt-scroll { position: relative; }
+
+/* ============================================================
+   DASHBOARD — one screen
+   A header line, then a 2×2 grid: this month | today, net worth | money.
+   On a laptop (wide and tall enough) the page is locked to the viewport and
+   the chart takes whatever height is left; narrower or shorter, it stacks and
+   scrolls like any other page.
+   ============================================================ */
+.dash-top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4) var(--sp-6);
+  flex-wrap: wrap;
+}
+.dash-top .dash-left { min-width: 0; }
+.dash-top .dash-greeting { font-size: var(--fs-xl); font-weight: 800; letter-spacing: -0.03em; }
+.dash-top .dash-date { margin-top: 0; }
+.dash-top .dash-nw-stat { margin-left: auto; }
+.dash-top .dash-nw-value { font-size: var(--fs-2xl); }
+
+.dash-todo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.dash-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: calc(var(--control-h) - 6px);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  transition: border-color var(--transition), color var(--transition);
+}
+.dash-pill i { color: var(--warning); }
+.dash-pill:hover { border-color: var(--border-accent); color: var(--text-primary); }
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr);
+  gap: var(--sp-4);
+  margin-top: var(--sp-4);
+}
+.dash-card { padding: var(--sp-5); display: flex; flex-direction: column; min-height: 0; }
+.dash-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; }
+.dash-card-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  color: var(--text-primary);
+  text-align: left;
+  align-self: flex-start;
+}
+.dash-card-title > i { font-size: var(--fs-xs); color: var(--text-muted); transition: transform var(--transition), color var(--transition); }
+.dash-card-title:hover > i { color: var(--accent); transform: translateX(2px); }
+.dash-card-meta { font-size: var(--fs-xs); color: var(--text-muted); }
+.dash-card > .dash-card-title + *,
+.dash-card > .dash-card-head + * { margin-top: var(--sp-4); }
+
+.dash-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-4) var(--sp-5);
+}
+.dash-stat { min-width: 0; }
+.dash-stat-label {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.dash-stat-value {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: var(--sp-1);
+  white-space: nowrap;
+}
+.dash-stat-value.is-success { color: var(--success); }
+.dash-stat-value.is-warning { color: var(--warning); }
+.dash-stat-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dash-stats.is-stale { opacity: 0.6; }
+
+/* The month card reuses the life-strip pieces without their dividers. */
+.dash-card .life-strip { margin-top: var(--sp-4); border-top: 0; padding-top: 0; gap: var(--sp-6); }
+.dash-card .life-cats { padding-left: var(--sp-5); gap: var(--sp-1); }
+
+.dash-chart-card .chart-canvas-wrap { --chart-h: 15rem; }
+
+@media (min-width: 981px) and (min-height: 640px) {
+  .main-content:has(.dash-page) { height: 100vh; min-height: 0; overflow: hidden; }
+  .main-content > div:has(.dash-page) {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .dash-page {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    padding-top: var(--sp-5);
+    padding-bottom: var(--sp-5);
+  }
+  .dash-grid {
+    flex: 1;
+    min-height: 0;
+    /* The second row is exactly what is left; an `auto` row would let the
+       canvas size itself and push the page into a scroll. */
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .dash-chart-card .chart-canvas-wrap { flex: 1; min-height: 0; height: auto; }
+}
+
+@media (max-width: 980px) {
+  .dash-grid { grid-template-columns: minmax(0, 1fr); }
+  .dash-top .dash-nw-stat { margin-left: 0; }
+}
