@@ -9,14 +9,40 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 
     <!--
-      Chart.js, its date adapter, Grid.js, Font Awesome and Inter used to load
-      here from four separate CDNs — render-blocking, no SRI, no fallback. They
-      are npm dependencies now, bundled through src/vendor.js, which is what
-      lets the production CSP stay at `default-src 'self'`.
+      Chart.js, its date adapter, Font Awesome and Inter used to load here from
+      separate CDNs — render-blocking, no SRI, no fallback. They are npm
+      dependencies now (Font Awesome as a generated subset, src/icons.css),
+      which is what lets the production CSP stay at `default-src 'self'`.
+
+      The style below is the boot frame: a dark page with the sidebar's shape,
+      painted from the HTML alone so a cold load is not a white screen while
+      the script downloads. main.js replaces #app's contents. Inline styles are
+      allowed by the CSP (style-src 'unsafe-inline'); the hex values match the
+      tokens in style.css, which has not loaded yet at this point.
     -->
+    <style>
+      html, body { margin: 0; background: #0a0f1e; color-scheme: dark; }
+      .boot { display: flex; min-height: 100vh; }
+      .boot-side { width: 240px; flex-shrink: 0; background: #111827; border-right: 1px solid rgba(148,163,184,0.14); }
+      .boot-main { flex: 1; padding: 2rem; display: grid; gap: 1rem; align-content: start; }
+      .boot-bar { height: 7rem; border-radius: 16px; background: #162032; animation: boot 1.4s ease-in-out infinite alternate; }
+      .boot-bar.is-short { height: 2.5rem; width: 40%; }
+      @keyframes boot { to { opacity: 0.55; } }
+      @media (max-width: 900px) { .boot-side { display: none; } .boot-main { padding: 1rem; } }
+      @media (prefers-reduced-motion: reduce) { .boot-bar { animation: none; } }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="boot" aria-busy="true" aria-label="Loading FinanceHub">
+        <div class="boot-side"></div>
+        <div class="boot-main">
+          <div class="boot-bar is-short"></div>
+          <div class="boot-bar"></div>
+          <div class="boot-bar"></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

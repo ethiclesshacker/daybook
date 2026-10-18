@@ -1,4 +1,4 @@
-import { Chart } from '../vendor.js';
+import { Chart, CHART_FONT_SIZE } from '../chart-setup.js';
 import { createTable } from '../table.js';
 import { getCurrentUserId } from '../supabase.js';
 import * as api from '../points/api.js';
@@ -7,10 +7,10 @@ import * as settings from '../settings.js';
 import {
   formatINR, formatINRFull, formatPercent, formatDate, todayISO,
   destroyChart, downloadCSV, escapeHTML, cssVar,
-  openModal, closeModal, showToast, parseNum, fetchEURtoINR, CHART_COLORS, renderKpiCards,
+  openModal, closeModal, showToast, parseNum, fetchEURtoINR, cachedEURtoINR, CHART_COLORS, renderKpiCards,
   numCell, rowActions, callAttrs, comboboxHTML, wireCombobox, withBusy,
 } from '../utils.js';
-import { wireChartToggle, withAlpha, monthAxis, GRID_LINE } from '../charts.js';
+import { wireChartToggle, withAlpha, monthAxis, GRID_LINE, percentLegendLabels, lastPointOnly } from '../charts.js';
 import { calcPoints, pointsSummary } from '../points-math.js';
 
 let transactions = [];
@@ -68,6 +68,10 @@ export async function renderPoints(container) {
   filterMultiplier = '';
   filterPartner = '';
   filterMerchant = '';
+  // The "Review assumed rows" filter is a module variable too, and it used to
+  // survive leaving the page: coming back showed a filtered table with no
+  // sign of why rows were missing.
+  filterBasis = '';
 
   container.innerHTML = `
     <div class="page-header">
@@ -131,17 +135,17 @@ export async function renderPoints(container) {
       <!-- Table section -->
       <div class="table-section">
         <div class="table-toolbar">
-          <div class="table-tabs">
-            <button type="button" class="table-tab active" id="tab-transactions">
+          <div class="table-tabs" role="tablist" aria-label="Card records">
+            <button type="button" class="table-tab active" id="tab-transactions" role="tab" aria-selected="true" aria-controls="pt-transactions-table">
               <i class="fas fa-receipt" aria-hidden="true"></i>Transactions
             </button>
-            <button type="button" class="table-tab" id="tab-redemptions">
+            <button type="button" class="table-tab" id="tab-redemptions" role="tab" aria-selected="false" aria-controls="pt-redemptions-table">
               <i class="fas fa-plane-departure" aria-hidden="true"></i>Redemptions
             </button>
-            <button type="button" class="table-tab" id="tab-rules">
+            <button type="button" class="table-tab" id="tab-rules" role="tab" aria-selected="false" aria-controls="pt-rules-table">
               <i class="fas fa-tags" aria-hidden="true"></i>Rules
             </button>
-            <button type="button" class="table-tab" id="tab-reconcile">
+            <button type="button" class="table-tab" id="tab-reconcile" role="tab" aria-selected="false" aria-controls="pt-reconcile-table">
               <i class="fas fa-code-compare" aria-hidden="true"></i>Reconcile
             </button>
           </div>
@@ -149,7 +153,7 @@ export async function renderPoints(container) {
             <div id="pt-dynamic-filter-container"></div>
             <div class="search-input-wrap">
               <i class="fas fa-search"></i>
-              <input type="text" class="search-input" id="pt-search" placeholder="Search…" />
+              <input type="search" class="search-input" id="pt-search" placeholder="Search…" aria-label="Search the table" />
             </div>
             <button type="button" class="btn-icon" id="pt-refresh-btn" title="Refresh" aria-label="Refresh">
               <i class="fas fa-rotate-right"></i>
@@ -188,8 +192,8 @@ export async function renderPoints(container) {
   // Export
   document.getElementById('pt-export-btn').addEventListener('click', exportCSV);
 
-  // Refresh
-  document.getElementById('pt-refresh-btn').addEventListener('click', loadData);
+  // Refresh — past the session cache, to the database.
+  document.getElementById('pt-refresh-btn').addEventListener('click', () => { api.refresh(); loadData(); });
 
   // Search
   // One box searches all three tables — each matches what it shows, dates and
@@ -224,24 +228,51 @@ function restoreScroll(state) {
   if (main) main.scrollTop = state.main;
 }
 
-async function loadData() {
+/**
+ * @param {object} [opts]
+ *   sync — run cc_sync_from_events alongside the reads (the first load does;
+ *          the reload it triggers does not, or it would loop).
+ */
+async function loadData({ sync = true } = {}) {
   const token = ++loadToken;
   const place = scrollState();
   // Pick up any spend on the card the ledger has seen since the last visit.
-  // Idempotent and cheap; a failure here must not stop the page loading.
-  await api.syncFromEvents().catch(() => {});
+  // It used to be awaited before every read, so the page waited on a write
+  // that almost always does nothing. Now it runs beside the reads, and only
+  // if it actually created rows is the page read again (its result says).
+  if (sync) {
+    api.syncFromEvents()
+      .then(result => {
+        if (Number(result?.created) > 0 && token === loadToken) loadData({ sync: false });
+      })
+      .catch(() => {});
+  }
+
+  // The EUR rate only values the balance: paint with the cached or fallback
+  // rate and repaint the KPIs if a fresh one arrives, rather than holding the
+  // whole page on frankfurter.dev.
+  const known = cachedEURtoINR();
+  const rate = known ?? EUR_INR_FALLBACK;
+  if (known === null) {
+    fetchEURtoINR(EUR_INR_FALLBACK).then(fresh => {
+      if (token !== loadToken || fresh === eurRate) return;
+      eurRate = fresh;
+      renderFxBadge(fresh);
+      renderKPIs();
+    });
+  }
 
   // cc_points is cc_transactions as it should be read: for a row linked to a
   // ledger event, the date and amount are the bank's, not a typed copy.
   // Rules and the reconcile lists are optional — the page stands without them.
-  let tx, rd, rate, ruleRows, recon;
+  let tx, rd, ruleRows, recon;
   try {
-    [tx, rd, rate, ruleRows, recon] = await Promise.all([
+    [tx, rd, ruleRows, recon] = await Promise.all([
       api.listTransactions(),
       api.listRedemptions(),
-      fetchEURtoINR(EUR_INR_FALLBACK),
       api.listRules().catch(() => []),
       api.reconcile().catch(() => ({})),
+      settings.ready(),
     ]);
   } catch (err) {
     if (token === loadToken) showToast('Failed to load data: ' + err.message, 'error');
@@ -256,9 +287,7 @@ async function loadData() {
   reconcile = { to_match: [], no_alert_found: [], events_without_row: [], settled: {}, ...(recon || {}) };
   pointsDirty = false;
 
-  // Update FX badge
-  const badge = document.getElementById('fx-rate-badge');
-  if (badge) badge.innerHTML = `<i class="fas fa-euro-sign" aria-hidden="true"></i> 1 EUR = ₹${rate.toFixed(2)}`;
+  renderFxBadge(rate);
 
   renderKPIs();
   buildAccumulationChart(transactions, activeChartType);
@@ -271,6 +300,11 @@ async function loadData() {
   renderSyncBanner();
   // The charts lay out on the next frame; put the page back after they have.
   requestAnimationFrame(() => restoreScroll(place));
+}
+
+function renderFxBadge(rate) {
+  const badge = document.getElementById('fx-rate-badge');
+  if (badge) badge.innerHTML = `<i class="fas fa-euro-sign" aria-hidden="true"></i> 1 EUR = ₹${escapeHTML(rate.toFixed(2))}`;
 }
 
 // ── What the ledger added, and what never paired ───────
@@ -323,19 +357,23 @@ function renderKPIs() {
   const milestone = CC_MILESTONE_TARGET;
   const progressPct = milestone > 0 ? (totalSpent / milestone) * 100 : 0;
   const remaining = Math.max(milestone - totalSpent, 0);
+  const milestoneName = `${formatINR(milestone)} annual spend milestone`;
 
   const kpis = [
     {
       id: 'pt-kpi-spent', label: 'Total spent', icon: 'fa-cart-shopping', tone: 'accent', value: formatINRFull(totalSpent), raw: totalSpent,
       progress: Math.min(progressPct, 100),
-      sub: progressPct >= 100 ? 'Milestone reached' : `₹${Math.round(remaining).toLocaleString('en-IN')} to ₹${(CC_MILESTONE_TARGET/100000).toFixed(0)}L milestone`,
+      // Say which milestone: "Milestone reached" on its own named nothing.
+      sub: progressPct >= 100 ? `${milestoneName} reached` : `${formatINRFull(remaining)} to the ${milestoneName}`,
       tooltip: 'Lifetime total INR spend on the HSBC TravelOne card.',
     },
+    // The balance once in points and once in rupees (the Balance value card
+    // below). This card also carried the rupee value and the EUR figure, so
+    // the same balance was on screen three ways.
     {
       id: 'pt-kpi-balance', label: 'Points balance', icon: 'fa-star', tone: 'warning', value: Math.round(balance).toLocaleString('en-IN'), unit: 'pts', raw: Math.round(balance),
-      sub: `Est. value: ${formatINRFull(balanceINR)}`,
-      badge: { text: `${(balance / POINTS_PER_EUR).toFixed(0)} EUR`, type: 'neutral' },
-      tooltip: `Accrued minus redeemed. Value = balance ÷ ${POINTS_PER_EUR} EUR × ₹${eurRate.toFixed(0)}/EUR`,
+      sub: 'Accrued minus redeemed',
+      tooltip: `Accrued minus redeemed. Its value is on the Balance value card: balance ÷ ${POINTS_PER_EUR} pts per EUR × ₹${eurRate.toFixed(0)}/EUR`,
     },
     {
       id: 'pt-kpi-accrued', label: 'Total accrued', icon: 'fa-arrow-up-right-dots', tone: 'success', value: Math.round(totalAccrued).toLocaleString('en-IN'), unit: 'pts', raw: Math.round(totalAccrued),
@@ -397,13 +435,14 @@ function buildAccumulationChart(txns, type) {
         borderWidth: 2,
         borderRadius: type === 'bar' ? 6 : 0,
         fill: type === 'line',
-        tension: 0.4,
+        tension: 0,
         pointBackgroundColor: CHART_COLORS.purple,
-        pointRadius: 3, pointHoverRadius: 6,
+        pointRadius: type === 'line' ? lastPointOnly(4) : 0, pointHoverRadius: 6,
       }]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { display: false },
         tooltip: { callbacks: { label: ctx => ` ${Math.round(ctx.parsed.y).toLocaleString('en-IN')} pts` } }
@@ -436,8 +475,9 @@ function buildMerchantChart(txns) {
 
   const palette = [
     CHART_COLORS.accent, CHART_COLORS.purple, CHART_COLORS.success,
-    CHART_COLORS.warning, CHART_COLORS.pink, CHART_COLORS.teal, '#94a3b8'
+    CHART_COLORS.warning, CHART_COLORS.pink, CHART_COLORS.teal, CHART_COLORS.muted,
   ];
+  const total = top6.reduce((sum, [, v]) => sum + v, 0);
 
   merchantChartRef = new Chart(ctx, {
     type: 'doughnut',
@@ -452,8 +492,9 @@ function buildMerchantChart(txns) {
     options: {
       responsive: true, maintainAspectRatio: false, cutout: '70%',
       plugins: {
-        legend: { position: 'bottom', labels: { padding: 10, usePointStyle: true, pointStyleWidth: 8, font: { size: 10.5 } } },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${formatINR(ctx.parsed)}` } }
+        legend: { position: 'bottom', labels: { padding: 10, usePointStyle: true, pointStyleWidth: 8, font: { size: CHART_FONT_SIZE }, generateLabels: percentLegendLabels } },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${formatINR(ctx.parsed)} (${total ? Math.round((ctx.parsed / total) * 100) : 0}%)` } },
+        centerTotal: { text: formatINR(total), label: 'card spend' },
       }
     }
   });
@@ -510,6 +551,7 @@ function switchTab(tab) {
   activeTab = tab;
   for (const name of ['transactions', 'redemptions', 'rules', 'reconcile']) {
     document.getElementById(`tab-${name}`).classList.toggle('active', tab === name);
+    document.getElementById(`tab-${name}`).setAttribute('aria-selected', String(tab === name));
     document.getElementById(`pt-${name}-table`).hidden = tab !== name;
   }
   // Rules and Reconcile have nothing to export; say so on the button rather
@@ -562,8 +604,12 @@ function renderTxTable() {
       { key: 'amount', label: 'Amount', type: 'number', align: 'end', value: t => parseNum(t.amount), render: amountCell },
       { key: 'multiplier', label: 'Multiplier', type: 'number', value: t => Number(t.multiplier),
         render: t => `<span class="badge ${getMultiplierBadgeClass(t.multiplier)}">${escapeHTML(t.multiplier)}×</span>` },
+      // Green for points earned; a 0 is not good news and is not coloured as it.
       { key: 'points', label: 'Points', type: 'number', align: 'end', value: t => Math.round(calcPoints(t)),
-        render: t => numCell(Math.round(calcPoints(t)).toLocaleString('en-IN'), { tone: 'success', bold: true }) },
+        render: t => {
+          const pts = Math.round(calcPoints(t));
+          return numCell(pts.toLocaleString('en-IN'), pts > 0 ? { tone: 'success', bold: true } : { tone: 'text-muted' });
+        } },
       { key: 'actions', label: 'Actions', actions: true, render: t => (t.basis === 'assumed'
         ? `<button type="button" class="btn-sm btn-accent pt-confirm" ${callAttrs(`window.__ptTxConfirm('${t.id}')`)} title="The label and multiplier are right">Confirm</button>`
         : '') + rowActions(`window.__ptTxEdit('${t.id}')`, `window.__ptTxDelete('${t.id}')`, 'transaction') },
@@ -742,7 +788,7 @@ function openRuleForm(rule) {
 //   nothing found   typed rows with no plausible alert. Nothing to do; collapsed,
 //                   and acknowledged in one click.
 //
-// Plain DOM rather than Grid.js, on purpose: an action removes its own row and
+// Plain DOM rather than a src/table.js table, on purpose: an action removes its own row and
 // nothing else moves — no refetch, no redraw, no jump back to the top.
 
 function renderReconcile() {
@@ -803,7 +849,7 @@ function renderReconcile() {
     </section>
 
     <details class="pt-rc-section pt-rc-details" ${reconcile.no_alert_found.length ? '' : 'hidden'}>
-      <summary class="pt-recon-head">No card alert found <span class="pt-recon-count" id="pt-rc-n-fine">${reconcile.no_alert_found.length}</span></summary>
+      <summary class="pt-recon-head"><i class="fas fa-chevron-right pt-rc-chevron" aria-hidden="true"></i>No card alert found <span class="pt-recon-count" id="pt-rc-n-fine">${reconcile.no_alert_found.length}</span></summary>
       <p class="pt-recon-note">Rows you typed for which the ledger has no alert at all, usually because the email never came. They are fine as they are and need nothing from you.
         <button type="button" class="btn-sm btn-ghost" id="pt-rc-all-fine">Mark all as fine</button></p>
       <div class="pt-rc-list" id="pt-rc-fine">${fineRows}</div>
@@ -1058,11 +1104,11 @@ function openForm(data, type) {
   openModal({
     title,
     tabs: `
-      <div class="modal-tabs">
-        <button type="button" class="modal-tab ${isTransaction ? 'active' : ''}" id="modal-tab-tx" aria-pressed="${isTransaction}">
+      <div class="modal-tabs" role="tablist" aria-label="Kind of entry">
+        <button type="button" class="modal-tab ${isTransaction ? 'active' : ''}" id="modal-tab-tx" role="tab" aria-selected="${isTransaction}">
           <i class="fas fa-receipt" aria-hidden="true"></i>Transaction
         </button>
-        <button type="button" class="modal-tab ${!isTransaction ? 'active' : ''}" id="modal-tab-rd" aria-pressed="${!isTransaction}">
+        <button type="button" class="modal-tab ${!isTransaction ? 'active' : ''}" id="modal-tab-rd" role="tab" aria-selected="${!isTransaction}">
           <i class="fas fa-plane" aria-hidden="true"></i>Redemption
         </button>
       </div>`,
@@ -1079,6 +1125,8 @@ function openForm(data, type) {
       editingType = 'transaction';
       document.getElementById('modal-tab-tx').classList.add('active');
       document.getElementById('modal-tab-rd').classList.remove('active');
+      document.getElementById('modal-tab-tx').setAttribute('aria-selected', 'true');
+      document.getElementById('modal-tab-rd').setAttribute('aria-selected', 'false');
       body.innerHTML = transactionForm;
       document.getElementById('pt-form-submit').textContent = 'Add transaction';
       attachTxPreview();
@@ -1087,6 +1135,8 @@ function openForm(data, type) {
       editingType = 'redemption';
       document.getElementById('modal-tab-rd').classList.add('active');
       document.getElementById('modal-tab-tx').classList.remove('active');
+      document.getElementById('modal-tab-rd').setAttribute('aria-selected', 'true');
+      document.getElementById('modal-tab-tx').setAttribute('aria-selected', 'false');
       body.innerHTML = redemptionForm;
       document.getElementById('pt-form-submit').textContent = 'Add redemption';
       attachRdPreview();

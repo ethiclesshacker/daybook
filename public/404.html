@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Not found — FinanceHub</title>
+<!--
+  Cloudflare Pages serves this, with a 404 status, for any path that is not a
+  file. That is what makes a stale /assets/views-abc123.js fail as a real 404
+  instead of being answered with index.html and a 200 (which the browser then
+  tried to run as JavaScript). A `/assets/* … 404` line in _redirects was
+  tried first and is not honoured by Pages.
+
+  A person who lands on a stray path (/networth) is sent to the app: routing
+  is hash-based, so there is nothing at that path to show. A meta refresh,
+  because the CSP (script-src 'self') refuses inline script.
+-->
+<meta http-equiv="refresh" content="0; url=/">
+<style>body{margin:0;background:#0a0f1e;color:#b4c0d0;font:14px/1.6 system-ui,sans-serif;display:grid;place-items:center;min-height:100vh}a{color:#38bdf8}</style>
+</head>
+<body><p>Nothing here. <a href="/">Open FinanceHub</a>.</p></body>
+</html>

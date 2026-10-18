@@ -1,6 +1,6 @@
 # FinanceHub — Personal Finance Command Centre
 
-FinanceHub is a single-page personal finance app: net worth snapshots, asset allocation, emergency runway, financial-independence projections, a full HSBC TravelOne points and redemptions ledger, and a **Personal Event Ledger** that records what actually happens in your life — backed by Supabase and deployed to Cloudflare Pages.
+FinanceHub is a single-page personal finance app: net worth snapshots, asset allocation, emergency runway, a full HSBC TravelOne points and redemptions ledger, and a **Personal Event Ledger** that records what actually happens in your life — backed by Supabase and deployed to Cloudflare Pages.
 
 ---
 
@@ -8,12 +8,14 @@ FinanceHub is a single-page personal finance app: net worth snapshots, asset all
 
 | Route | What it does |
 | --- | --- |
-| `#dashboard` | Net worth, total assets, savings rate, FI progress, emergency runway, and a points summary strip. |
+| `#dashboard` | Net worth, total assets, savings rate, FI progress, emergency runway, today from Apple Health, this month's spending against budget, and a points summary strip. |
 | `#networth` | Snapshot history with KPIs, accumulation and allocation charts, filtering and CSV export. |
-| `#fi` | Savings rate (actual vs budgeted), time to FI, Coast FI, and a projection chart with live scenario sliders. |
-| `#points` | Transactions and redemptions, multiplier tracking, spend-by-merchant, value-per-point, CSV export. |
+| `#fi` | **Hidden** (2026-10-18). Savings rate, time to FI, Coast FI and a projection chart. It projected from the budgeted surplus, several times more optimistic than what is actually saved; the code is kept in `src/views/fi.js`, unregistered. |
+| `#points` | Transactions and redemptions, multiplier tracking, spend-by-merchant, value-per-point, merchant rules, reconcile against card alerts, CSV export. |
 | `#ledger` | **Life** — a chronological record of purchases, meals, travel, meetings and deliveries, filled in automatically from email. Filters, search, provenance on every event, a review queue and export. |
 | `#food` | **Food** — what you actually ate. Days split into breakfast, lunch, snacks and dinner, every order's dishes listed under it, and a ranking of what you eat most. Meals with no receipt behind them — a grocery packet opened on Tuesday, a plate at a friend's — are added by hand, picking from the dishes you have eaten before. |
+| `#dishes` | **Dishes** — the dish dictionary behind Food's calories: correct a dish's numbers, add one, or merge two spellings into one. |
+| `#health` | **Health** — Apple Health as days: steps, sleep by stage, energy eaten against burned, resting heart rate, HRV, workouts. |
 | `#settings` | Every personal number the other screens derive from. |
 
 ---
@@ -81,12 +83,14 @@ credentials and the Supabase service-role key never leave your machine.
 - **Frontend:** vanilla ES modules, HTML5, CSS3 (glassmorphic dark theme)
 - **Routing:** hash-based client-side router (`src/router.js`)
 - **Bundler:** [Vite](https://vite.dev/)
-- **Charts:** [Chart.js](https://www.chartjs.org/) + `chartjs-adapter-date-fns`
-- **Tables:** [Grid.js](https://gridjs.io/)
+- **Charts:** [Chart.js](https://www.chartjs.org/) + `chartjs-adapter-date-fns`, registered piece by piece in `src/chart-setup.js`
+- **Tables:** `src/table.js` (sorting, search and paging; the rules are in `src/table-core.js`)
 - **Backend:** [Supabase](https://supabase.com/) — email-code (OTP) auth, Postgres, RLS
 - **Hosting:** Cloudflare Pages (direct upload via Wrangler)
 
-Chart.js, Grid.js, Font Awesome and Inter are all npm dependencies bundled through `src/vendor.js` — nothing loads from a CDN, which is what lets the production CSP stay at `default-src 'self'`.
+Chart.js, Font Awesome and Inter are all npm dependencies — nothing loads from a CDN, which is what lets the production CSP stay at `default-src 'self'`. Each screen is its own chunk, loaded on first visit (`src/views/app.js`); Chart.js loads with the first screen that draws a chart.
+
+Font Awesome is a generated subset: `src/icons.css` holds only the solid icons the app uses. After using a new icon, run `node scripts/fa-subset.mjs`; `npm test` fails if an icon in `src/` is missing from it.
 
 ---
 
@@ -221,15 +225,20 @@ Because the build happens locally, setting `VITE_SUPABASE_*` in the Cloudflare d
 ```
 src/
   main.js            entry point; auth state → render
-  supabase.js        client + getCurrentUserId
+  supabase.js        client (auth-js + postgrest-js) + getCurrentUserId
   settings.js        SETTINGS_SCHEMA, load/save, derived values
   constants.js       app-level config (card tiers, transfer partners)
   networth-math.js   pure net worth computations
   finance.js         pure savings-rate and FI projection maths
-  utils.js           formatting, charts, modals, CSV, escaping
-  vendor.js          bundled Chart.js / Grid.js / Font Awesome / Inter
-  router.js          hash router
-  views/             dashboard, networth, fi, points, ledger, settings, login, app shell
+  utils.js           formatting (money, dates), modals, CSV, escaping
+  chart-setup.js     Chart.js with only the pieces used, defaults, two small plugins
+  charts.js          shared chart builders (net worth series, allocation doughnut)
+  cache.js           per-session read cache for the API modules
+  icons.css          generated Font Awesome subset (scripts/fa-subset.mjs)
+  vendor.js          bundled Font Awesome subset / Inter
+  router.js          hash router; lazy, code-split views
+  views/             dashboard, networth, points, ledger, food, dishes, health, settings, login, app shell
+                     (fi.js is kept but not registered)
   ledger/            pure event-ledger core — taxonomy, normalization, dedupe keys,
                      email extraction, natural-language parsing, summaries.
                      Imported unchanged by the browser, the jobs and the tests.

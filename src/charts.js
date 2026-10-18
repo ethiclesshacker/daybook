@@ -9,9 +9,9 @@
 // and the data to draw, and returns the Chart it made.
 // ======================================================
 
-import { Chart } from './vendor.js';
+import { Chart, CHART_FONT_SIZE } from './chart-setup.js';
 import {
-  formatINR, formatINRFull, cssVar, destroyChart, CHART_COLORS, ASSET_COLORS,
+  formatINR, formatINRFull, inrAxisTick, cssVar, destroyChart, CHART_COLORS, ASSET_COLORS,
   computeNet, computeAssets,
 } from './utils.js';
 
@@ -21,11 +21,35 @@ export function withAlpha(hex, alpha) {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
 }
 
-/** Axis tick callback: ₹1.2Cr / ₹4.5L / ₹80k. Sign-safe. */
-export function inrTicks(v) {
-  if (Math.abs(v) >= 1e7) return '₹' + (v / 1e7).toFixed(1) + 'Cr';
-  if (Math.abs(v) >= 1e5) return '₹' + (v / 1e5).toFixed(1) + 'L';
-  return '₹' + (v / 1000).toFixed(0) + 'k';
+/**
+ * Axis tick callback: "₹0", "₹40L", "₹1.2Cr" — the one money rule in
+ * utils.js. It used to switch to "₹80k" below a lakh, so one axis could read
+ * k at the bottom and L at the top.
+ */
+export const inrTicks = inrAxisTick;
+
+/**
+ * Markers only where they say something: the last reading (where you are now)
+ * and whichever one the pointer is on. A dot on every snapshot turned a line
+ * into a string of beads.
+ */
+export function lastPointOnly(radius = 4) {
+  return ctx => (ctx.dataIndex === ctx.dataset.data.length - 1 ? radius : 0);
+}
+
+/**
+ * A legend whose labels carry each slice's share — "Stocks 42%" — because a
+ * doughnut's angles are the hardest encoding to read a number off.
+ */
+export function percentLegendLabels(chart) {
+  const original = Chart.overrides.doughnut.plugins.legend.labels.generateLabels(chart);
+  const data = chart.data.datasets[0]?.data || [];
+  const total = data.reduce((sum, v) => sum + (Number(v) || 0), 0);
+  return original.map(item => {
+    const value = Number(data[item.index]) || 0;
+    const pct = total ? (value / total) * 100 : 0;
+    return { ...item, text: `${item.text} ${pct < 1 && pct > 0 ? '<1' : Math.round(pct)}%` };
+  });
 }
 
 /** A top-to-bottom fade from `colour` at `alpha` to transparent, for an area fill. */
@@ -83,8 +107,10 @@ export function netWorthSeriesChart(canvas, entries, type = 'line', { withAssets
     data: entries.map(computeNet),
     borderColor: CHART_COLORS.accent,
     backgroundColor: isBar ? withAlpha(CHART_COLORS.accent, 0.32) : verticalGradient(canvas, 220),
-    borderWidth: 2, fill: !isBar, tension: 0.4,
-    pointBackgroundColor: CHART_COLORS.accent, pointRadius: 3, pointHoverRadius: 6,
+    // Straight segments: snapshots are readings, and a smoothed curve between
+    // them drew values that were never measured.
+    borderWidth: 2, fill: !isBar, tension: 0,
+    pointBackgroundColor: CHART_COLORS.accent, pointRadius: isBar ? 0 : lastPointOnly(4), pointHoverRadius: 6,
   }];
 
   if (withAssets) {
@@ -93,7 +119,7 @@ export function netWorthSeriesChart(canvas, entries, type = 'line', { withAssets
       data: entries.map(computeAssets),
       borderColor: CHART_COLORS.success,
       backgroundColor: withAlpha(CHART_COLORS.success, 0.08),
-      borderWidth: 1.5, fill: false, tension: 0.4,
+      borderWidth: 1.5, fill: false, tension: 0,
       pointRadius: 0, pointHoverRadius: 4, borderDash: [4, 4],
     });
   }
@@ -103,10 +129,12 @@ export function netWorthSeriesChart(canvas, entries, type = 'line', { withAssets
     data: { labels: entries.map(e => e.date), datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
-      interaction: withAssets ? { mode: 'index', intersect: false } : undefined,
+      // Hover anywhere along the x-axis, not only on a marker: the markers are
+      // hidden until hovered, so there would be nothing to aim at.
+      interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: withAssets
-          ? { position: 'top', labels: { usePointStyle: true, pointStyleWidth: 8, padding: 16, font: { size: 11 } } }
+          ? { position: 'top', labels: { usePointStyle: true, pointStyleWidth: 8, padding: 16, font: { size: CHART_FONT_SIZE } } }
           : { display: false },
         tooltip: {
           callbacks: {
@@ -138,12 +166,15 @@ export function allocationDoughnut(canvas, latest) {
   if (!canvas || !latest) return null;
   const fields = ASSET_FIELDS.filter(f => (latest[f.key] || 0) > 0);
 
+  const values = fields.map(f => latest[f.key] || 0);
+  const total = values.reduce((sum, v) => sum + v, 0);
+
   return new Chart(canvas, {
     type: 'doughnut',
     data: {
       labels: fields.map(f => f.label),
       datasets: [{
-        data: fields.map(f => latest[f.key] || 0),
+        data: values,
         backgroundColor: fields.map(f => ASSET_COLORS[f.key]),
         // Resolved off the document — `var(--bg-card)` never resolves on a canvas.
         borderColor: cssVar('--bg-card', '#162032'),
@@ -153,8 +184,12 @@ export function allocationDoughnut(canvas, latest) {
     options: {
       responsive: true, maintainAspectRatio: false, cutout: '72%',
       plugins: {
-        legend: { position: 'bottom', labels: { padding: 12, usePointStyle: true, pointStyleWidth: 8, font: { size: 11 } } },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${formatINR(ctx.parsed)}` } },
+        legend: {
+          position: 'bottom',
+          labels: { padding: 12, usePointStyle: true, pointStyleWidth: 8, font: { size: CHART_FONT_SIZE }, generateLabels: percentLegendLabels },
+        },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${formatINR(ctx.parsed)} (${total ? Math.round((ctx.parsed / total) * 100) : 0}%)` } },
+        centerTotal: { text: formatINR(total), label: 'total assets' },
       },
     },
   });

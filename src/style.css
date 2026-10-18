@@ -3876,3 +3876,225 @@ input, select, textarea {
 .hl-table th:first-child,
 .hl-table td:first-child { text-align: left; }
 .hl-table tbody th { font-weight: 600; color: var(--text-primary); }
+
+/* ============================================================
+   2026-10-18 REVIEW FIXES
+   Everything below is on the existing scales: --fs-*, --sp-*, the
+   text tokens and the semantic tones. No new sizes, no new greys.
+   ============================================================ */
+
+/* ---------- The floating + clears the content under it ----------
+   56px button, 2rem from the edge: the last row's amount, its delete icon
+   and the pager sat underneath it. Every page that has a FAB gets room at
+   the foot of its scrolling area. */
+.main-content > div:has(> .fab) .page-body { padding-bottom: calc(56px + 2rem + var(--sp-6)); }
+.main-content > div:has(> .fab) .vp-scroll { padding-bottom: calc(56px + var(--sp-8)); }
+@media (min-width: 981px) {
+  /* The viewport-locked pages scroll inside their panel, so the page body
+     itself must not grow and break the lock. */
+  .main-content > div:has(> .fab) .vp-page { padding-bottom: var(--sp-5); }
+}
+
+/* ---------- Spend against budget: three tones, and the overrun ---------- */
+.life-spend-value.is-danger { color: var(--danger); }
+.life-spend-value.is-warning { color: var(--warning); }
+.life-spend-note.is-danger { color: var(--danger); font-weight: 600; }
+.life-spend-note.is-warning { color: var(--warning); }
+.life-bar.is-warning .progress-bar { background: var(--warning); }
+.life-bar.is-danger .progress-bar { background: var(--danger-solid); }
+.life-bar .progress-bar { position: relative; z-index: 1; }
+/* The part past the budget: striped, so it reads as "beyond" and not as more bar. */
+.life-overflow {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(135deg, var(--danger-solid) 0 4px, var(--danger-dim) 4px 8px);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+}
+.life-bar.is-warning .life-overflow {
+  background: repeating-linear-gradient(135deg, var(--warning) 0 4px, var(--warning-dim) 4px 8px);
+}
+/* An overrun larger than the drawn track runs off the end, and says so. */
+.life-overflow.is-beyond::after {
+  content: '';
+  position: absolute;
+  right: -7px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-left: 7px solid var(--danger-solid);
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+}
+.life-budget-mark {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text-primary);
+  border-radius: 1px;
+  z-index: 2;
+}
+.life-pace { z-index: 2; }
+
+/* ---------- Dashboard: how old "Today" is ---------- */
+.dash-asof {
+  margin-left: var(--sp-2);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.dash-asof.is-stale { color: var(--warning); }
+.points-strip.is-stale { opacity: 0.55; }
+
+/* ---------- Row actions: delete is quiet until you are on the row ----------
+   A column of red bins was the loudest thing on every table of money. */
+.row-actions .btn-icon.is-danger { color: var(--text-muted); opacity: 0.6; }
+.dt-table tbody tr:hover .row-actions .btn-icon.is-danger,
+.dt-table tbody tr:focus-within .row-actions .btn-icon.is-danger,
+.row-actions .btn-icon.is-danger:focus-visible { color: var(--danger); opacity: 1; }
+@media (hover: none) {
+  .row-actions .btn-icon.is-danger { opacity: 1; }
+}
+
+/* ---------- Sorting a right-aligned column ----------
+   The arrow was put on the label's left (row-reverse), where it sat closer
+   to the previous column's header than to its own — "MULTIPLIER ⇕  ⇕ POINTS".
+   It follows the label now, as on every other column, and the pair is
+   right-aligned over the digits. */
+.dt-table th[data-align="end"] .dt-sort { flex-direction: row; justify-content: flex-end; }
+
+/* ---------- Reconcile: the collapsed list says it opens ---------- */
+.pt-rc-details > summary { list-style: none; }
+.pt-rc-details > summary::-webkit-details-marker { display: none; }
+.pt-rc-chevron {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  transition: transform var(--transition);
+}
+.pt-rc-details[open] .pt-rc-chevron { transform: rotate(90deg); }
+
+/* ---------- Life: truncated lists, review reasons, summaries ---------- */
+.lg-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-4) var(--sp-6);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+.lg-more-count { font-variant-numeric: tabular-nums; }
+.tl-why {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+  font-size: var(--fs-xs);
+  color: var(--warning);
+}
+.tl-summary-list {
+  margin: var(--sp-1) 0 0;
+  padding-left: var(--sp-4);
+  list-style: disc;
+}
+.tl-summary-list li + li { margin-top: 0.15rem; }
+.tl-summary-para { display: block; }
+.tl-summary-para + .tl-summary-para { margin-top: var(--sp-1); }
+div.tl-day-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- Event detail: IDs, and Delete apart from Close ---------- */
+.lg-fact-key { text-transform: none; }
+.lg-id { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.lg-id-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.lg-copy { flex-shrink: 0; font-size: var(--fs-xs); }
+.lg-detail-id { margin-top: var(--sp-4); }
+.modal-footer .lg-footer-start { margin-right: auto; }
+
+/* ---------- Account menu ---------- */
+.user-menu-wrap { position: relative; }
+button.user-profile {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  min-height: var(--control-h);
+}
+button.user-profile:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.user-menu-caret { font-size: var(--fs-xs); color: var(--text-muted); transition: transform var(--transition); }
+.user-profile[aria-expanded="true"] .user-menu-caret { transform: rotate(180deg); }
+.user-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + var(--sp-2));
+  min-width: 11rem;
+  padding: var(--sp-1);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 5;
+}
+.user-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.user-menu-item:hover, .user-menu-item:focus-visible { background: var(--danger-dim); color: var(--danger); }
+#app-shell.is-rail .user-menu-caret { display: none; }
+#app-shell.is-rail .user-menu { right: auto; }
+@media (max-width: 900px) {
+  #app-shell.is-rail .user-menu-caret { display: inline-block; }
+  #app-shell.is-rail .user-menu { right: 0; }
+}
+
+/* ---------- Food: what one point on the chart is ---------- */
+.fd-chart-caption {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: var(--sp-2);
+}
+
+/* ---------- Health: an incomplete eaten figure is hatched ---------- */
+.hl-swatch--hatch {
+  background: repeating-linear-gradient(135deg, var(--swatch) 0 2px, transparent 2px 4px);
+  box-shadow: inset 0 0 0 1px var(--swatch);
+}
+
+/* ---------- Settings: clamp feedback ---------- */
+.set-clamp {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--warning);
+}
+.set-field.is-clamped .form-input { border-color: var(--warning); }
+
+/* ---------- Search inputs are type=search now: no native clear glyph clash ---------- */
+.search-input::-webkit-search-cancel-button { filter: grayscale(1) opacity(0.6); }
+
+/* ---------- Tables: keep their screen-reader text inside the scroller ----------
+   The Actions header's .sr-only label is position:absolute. With no
+   positioned ancestor inside .dt-scroll it was laid out against the page,
+   at the far end of the wide table, and gave the whole page a horizontal
+   scrollbar at tablet and phone widths. */
+.dt-scroll { position: relative; }
