@@ -123,7 +123,16 @@ function _render(viewId) {
     .catch(err => {
       console.error(`[router] render ${viewId} failed:`, err);
       if (token === renderToken && route.resolve && !route.render) {
-        // The chunk itself failed — usually a deploy replaced it under an open tab.
+        // The chunk itself failed — usually a deploy replaced it under an open
+        // tab, or the edge had not caught up yet. Reload once by itself; only a
+        // second failure within the minute is shown.
+        let lastRetry = 0;
+        try { lastRetry = Number(sessionStorage.getItem('chunk-retry-at')) || 0; } catch { /* storage off */ }
+        if (Date.now() - lastRetry > 60_000) {
+          try { sessionStorage.setItem('chunk-retry-at', String(Date.now())); } catch { /* storage off */ }
+          window.location.reload();
+          return;
+        }
         container.innerHTML = `<div class="page-body"><div class="dash-banner dash-banner--error" role="alert">
           <div><strong>This screen could not load.</strong>
           <div class="dash-banner-sub">Reload the page to fetch the latest version.</div></div></div></div>`;
