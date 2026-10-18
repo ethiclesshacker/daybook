@@ -49,7 +49,8 @@ test('normalizeName and its SQL twin strip the same corporate suffixes', () => {
   // ledger_normalize_name produces entities.normalized_name; this produces
   // what ledger_find_duplicate is asked to match against. If the two lists
   // ever differ, one merchant becomes two entities and nobody is told.
-  const sql = readFileSync(new URL('../supabase/migrations/0004_ledger_api.sql', import.meta.url), 'utf8');
+  // The latest definition: 0020 replaced 0004's (apostrophes, lone "s").
+  const sql = readFileSync(new URL('../supabase/migrations/0020_taxonomy.sql', import.meta.url), 'utf8');
   const fn = sql.slice(sql.indexOf('function public.ledger_normalize_name'));
   const suffixes = fn.match(/\\s\+\((\w+(?:\|\w+)+)\)\\s\*\$/)?.[1];
   assert.ok(suffixes, 'could not find the suffix alternation in ledger_normalize_name');

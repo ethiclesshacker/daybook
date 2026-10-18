@@ -812,3 +812,49 @@ Confidence is left as it was. What the language model read on its own stays in
 the queue, which is what its 0.88 cap is for. Every change is in the audit log as
 `event_auto_confirmed` with its reason, and `ledger_undo_auto_confirm(since)`
 puts them back.
+
+## Money in rupees, and one vocabulary (0019–0025)
+
+**Currency.** `public.ledger_amount_inr(data, occurred_at)` (0019) is the one
+place an amount becomes rupees: rupees pass through, a fiat currency is
+converted at the month's rate in `public.fx_rates` (monthly mean of the ECB
+reference rate, via frankfurter.app), and a unit that is not money (NeuCoins,
+any non-ISO code) or a currency with no rate gives NULL — so it is never in a
+cash total. Every summing function uses it (`ledger_stats`, `life_days`,
+`ledger_get_entity`), every event read through the API carries it as
+`amount_inr`, and JS reads that (`amountInr()` in `normalize.js`) rather than
+converting again. The events trigger spells `data.currency` as ISO 4217 on
+every write (`ledger_normalize_currency`, JS twin `normalizeCurrency`). Add a
+month's rate with an `insert … on conflict do update` into `fx_rates`.
+
+**Taxonomy.** `src/ledger/taxonomy.js` holds the canonical subtypes per type,
+the spend categories and the budget bucket each counts against (the six
+buckets of the monthly budget), the synonyms sources use, note-type words,
+merchant patterns and the outlier rule. `public.ledger_taxonomy()` (0020)
+returns the same JSON, and `test/taxonomy.test.js` fails if they drift. The
+before-write trigger (0021) lands every write canonical — email, the model,
+Hermes, the app — keeping what a source originally said in `inference.raw`
+and recording where the category came from in `inference.category_source`
+(`user` is never re-derived). The model's extraction schema and Hermes' write
+tools take the same enums; `runTool()` refuses anything else and lists the
+valid values.
+
+A category is derived in this order: your note's type word, a type/subtype
+pair that settles it, the old subtype if it was a category word, what the
+source said, the merchant's name, the type's default — and, after every
+ingest, an event still `other` borrows what its merchant's other events agree
+on (`ledger_learn_categories`).
+
+**Entities.** Names normalise without apostrophes and with a lone "s"
+re-joined, so "Kapoor's Cafe", "KAPOOR S CAFE" and "Kapoors Cafe" are one.
+`merchant`, `restaurant` and `company` are one family for resolution, so a card
+alert and a receipt meet at one entity. A merge keeps the absorbed row,
+marked `metadata.merged_into`; ingestion that names it lands on the target.
+
+**The outlier guard.** A non-manual event whose spend is over ₹25,000 outside
+travel, rent, vehicle, insurance, investments, tax, electronics and education,
+or a subscription over ₹5,000, is set to `needs_review` with
+`inference.review_reason` — unless you already confirmed the same charge at the
+same merchant (within 15%) or confirmed its points row. Confirming it records
+`review_cleared`; `ledger_auto_confirm()` never confirms a flagged event on
+the strength of its sources.
