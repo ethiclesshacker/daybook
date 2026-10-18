@@ -16,7 +16,7 @@ import * as api from '../ledger/api.js';
 import { EVENT_TYPES, STATUSES, SOURCE_TYPES, SUBTYPES, typeMeta, statusMeta, sourceMeta } from '../ledger/taxonomy.js';
 // import { parseQuickEntry } from '../ledger/nlparse.js';  // now loaded on demand, see loadParser()
 import { summariseItems } from '../ledger/items.js';
-import { localDateISO } from '../ledger/normalize.js';
+import { localDateISO, amountInr } from '../ledger/normalize.js';
 import { formatTime as fmtTime, formatDayHeading, toLocalInput, dayStartISO } from '../ledger/dates.js';
 import { isInflow, moneyFlow } from '../ledger/summary.js';
 import * as settings from '../settings.js';
@@ -408,10 +408,9 @@ function renderTimeline() {
   container.innerHTML = `<div class="timeline">${[...days.entries()].map(([day, list]) => {
     const heading = day === today ? 'Today' : day === yesterday ? 'Yesterday' : formatDayHeading(day);
     // Money out only. A refund landing on a Tuesday should not read as if the
-    // day cost less than it did. Rupees only: a $20 charge added to ₹ totals
-    // as 20 rupees. TODO: use data.amount_inr once the SQL side provides it.
-    const dayTotal = list.reduce((sum, e) =>
-      sum + (isInflow(e) || !isINR(e.data?.currency) ? 0 : (Number(e.data?.amount) || 0)), 0);
+    // day cost less than it did. In rupees: amount_inr converts a $20 charge
+    // at its month's rate, and a non-cash unit (NeuCoins) adds nothing.
+    const dayTotal = list.reduce((sum, e) => sum + (isInflow(e) ? 0 : (amountInr(e) || 0)), 0);
     const written = summaries[day];
 
     return `

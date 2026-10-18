@@ -1384,6 +1384,11 @@ export async function runTool(name, args = {}) {
  * refused with the valid values, so the model can retry rather than coin a
  * category nobody will ever total.
  */
+/**
+ * @param {string} name
+ * @param {Record<string, any>} [args]
+ * @returns {Record<string, any>}
+ */
 export function validateArgs(name, args = {}) {
   const out = { ...args };
   const fail = (field, value, valid) => {

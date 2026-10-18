@@ -20,7 +20,7 @@ import { summariseItems, mealTitle, retitleForItems } from '../ledger/items.js';
 import {
   indexDictionary, eventNutrition, summarise, bucketDays, dishNutrition, SOURCE_LABEL,
 } from '../ledger/nutrition.js';
-import { localDateISO, entityRef } from '../ledger/normalize.js';
+import { localDateISO, entityRef, amountInr } from '../ledger/normalize.js';
 import { formatTime as fmtTime, formatDayHeading as fmtDayHeading, toLocalInput, shiftISO as shiftDay } from '../ledger/dates.js';
 import { isInflow } from '../ledger/summary.js';
 import * as settings from '../settings.js';
@@ -57,13 +57,8 @@ const formatTime = iso => fmtTime(iso, timeZone());
 const formatDayHeading = day => fmtDayHeading(day, { year: false });
 const kcalTarget = () => Number(settings.get('food_kcal_target')) || 1800;
 
-/**
- * Money out on a food event, in rupees. A receipt in another currency is left
- * out rather than added as if its dollars were rupees.
- * TODO: use data.amount_inr once the SQL side converts (currency work in flight).
- */
-const rupeeSpend = event =>
-  (isInflow(event) || !isINR(event.data?.currency) ? 0 : Number(event.data?.amount) || 0);
+/** Money out on a food event, in rupees (amount_inr converts other currencies). */
+const rupeeSpend = event => (isInflow(event) ? 0 : amountInr(event) || 0);
 
 
 export async function renderFood(container) {
@@ -815,7 +810,7 @@ function aggregateDishes(list) {
         name: item.name, count: 0, spend: 0, priced: 0, lastAt: null, places: new Set(),
       };
       dish.count += Number(item.qty) || 1;
-      // Rupees only — see rupeeSpend. TODO: amount_inr once it exists.
+      // Line items are not converted; a foreign receipt's dishes carry no spend.
       if (Number.isFinite(Number(item.amount)) && isINR(event.data?.currency)) { dish.spend += Number(item.amount); dish.priced++; }
       if (!dish.lastAt || event.occurred_at > dish.lastAt) dish.lastAt = event.occurred_at;
       const place = event.data?.restaurant || event.data?.merchant;
