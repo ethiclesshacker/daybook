@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // The last rung of the extraction ladder.
 //

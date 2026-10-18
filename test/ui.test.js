@@ -1,3 +1,4 @@
+// @ts-check
 // The browser-side rules from the 2026-10-18 review that can run in node:
 // the money format, the budget tones, gap-filled series, CSV cells, URL
 // safety, the session cache, and that every icon used exists in the subset.

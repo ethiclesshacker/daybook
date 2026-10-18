@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Chart.js, registered piece by piece.
 //

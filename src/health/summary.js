@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Pure helpers for the Health screen. No DOM, no network — so they run under
 // `node --test` exactly as they run in the browser.

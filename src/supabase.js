@@ -1,3 +1,4 @@
+// @ts-check
 // import { createClient } from '@supabase/supabase-js';  // replaced below: it bundles realtime + storage (~95 KB) this app never uses
 import { AuthClient } from '@supabase/auth-js';
 import { PostgrestClient } from '@supabase/postgrest-js';

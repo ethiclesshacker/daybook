@@ -1,3 +1,4 @@
+// @ts-check
 // Run with: npm test
 // The tool layer's pure parts: how a date phrase becomes a range, and what the
 // manifest and the MCP server can rely on the tool table for. No database.

@@ -64,6 +64,31 @@ the ledger has.
 The bar: would you want this on the timeline when you scroll back in a year?
 If yes, one sentence is enough — Hermes types and files it.
 
+## Every evening: Edith asks, you answer
+
+If you didn't log the day as it happened, you don't have to. At **21:30 IST**
+Edith sends one Telegram message: how the day went, and a short list of what
+the record is missing.
+
+```
+How did today go?
+Missing: lunch, weight, ₹1,858 TNS Payments, Sat dinner
+```
+
+Answer in your own words, as much or as little as you like. Retelling things
+the ledger already has is fine: Edith checks the day's record first, enriches
+what is there (adds the dish to a Swiggy order, a merchant to a card alert)
+and only adds what is new, so a meal, spend, weigh-in or workout is never
+logged twice. Her reply lists what she logged and what she already had, then
+asks once about anything from the Missing line you skipped. That is the only
+follow-up. Your words about the day are kept as a `Journal: <date>` note.
+
+If you never answer, the next weekday's morning briefing carries one line,
+"Yesterday — how did it go? Missing: …". To stop the check-in:
+`hermes cron pause evening-checkin`. The skill lives at
+`~/.hermes/skills/productivity/journal/SKILL.md`; the context it reads comes
+from `~/.hermes/scripts/journal-context`.
+
 ## Scanning packaged food
 
 Reading a barcode out (or photographing it) resolves the product against its

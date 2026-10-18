@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Time series with their gaps left in.
 //
@@ -31,6 +32,9 @@ function nextSlot(slot, grain) {
  *
  * `from` is clamped to the first row, so an "all time" range does not draw a
  * decade of nothing before the first reading.
+ *
+ * @param {any[]} rows
+ * @param {{ grain?: string, from?: string, to?: string, keyOf?: (r: any) => any, at?: string }} [opts]
  */
 export function fillSeries(rows, { grain = 'day', from, to, keyOf = r => r.at, at = 'at' } = {}) {
   if (!rows.length) return [];

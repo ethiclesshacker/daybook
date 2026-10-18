@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Tests for ingestion reliability: what happens when the model, the database
 // or the mailbox lets a run down.

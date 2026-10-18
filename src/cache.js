@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // A tiny per-session read cache for the API modules.
 //

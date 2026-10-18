@@ -1,3 +1,4 @@
+// @ts-check
 // Hash-based SPA router
 // URLs: /#dashboard, /#networth, /#points, /#ledger, /#food, /#dishes, /#health
 // Handles refresh, back/forward, and deep-links automatically.
@@ -73,7 +74,7 @@ export function navigateTo(viewId) {
 
 function _render(viewId) {
   // Update nav active state
-  document.querySelectorAll('.nav-item[data-view]').forEach(item => {
+  /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('.nav-item[data-view]')).forEach(item => {
     const isActive = item.dataset.view === viewId;
     item.classList.toggle('active', isActive);
     // Tell assistive tech which view is current, not just which one is blue.

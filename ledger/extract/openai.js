@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // The single door to the OpenAI API.
 //

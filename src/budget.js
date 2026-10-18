@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Spend against a monthly budget — the one rule, wherever it is drawn.
 //

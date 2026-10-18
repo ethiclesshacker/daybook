@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Line items — what was actually in the order.
 //

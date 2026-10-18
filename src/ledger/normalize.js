@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Normalization — merchants, people, places, amounts, dates.
 //

@@ -8,8 +8,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test 'test/*.test.js'",
-    "deploy": "npm run build && wrangler pages deploy dist --project-name finance --branch main",
-    "deploy:preview": "npm run build && wrangler pages deploy dist --project-name finance --branch preview",
+    "lint": "eslint .",
+    "typecheck": "tsc -p .",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "deploy": "npm run check && wrangler pages deploy dist --project-name finance --branch main",
+    "deploy:preview": "npm run check && wrangler pages deploy dist --project-name finance --branch preview",
     "ledger:probe": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js probe",
     "ledger:ingest": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js ingest",
     "ledger:summarize": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js summarize",
@@ -24,6 +27,11 @@
     "ledger:tools-manifest": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js tools-manifest"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^26.6.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0",
+    "typescript": "^5.9.3",
     "vite": "^8.1.1"
   },
   "dependencies": {

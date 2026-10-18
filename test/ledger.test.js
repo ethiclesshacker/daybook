@@ -22,7 +22,7 @@ import {
 import { dedupeKey, deriveDedupeKey } from '../src/ledger/dedupe.js';
 import {
   triage, extractJsonLd, fromSchemaOrg, parseICS, fromICS, icsToISO,
-  extractDeterministic, senderFingerprint, htmlToText, withKeys, isSelfPayee,
+  extractDeterministic, senderFingerprint, htmlToText, withKeys,
 } from '../src/ledger/email.js';
 import { parseOrderItems, summariseItems, dishName, mealTitle, retitleForItems } from '../src/ledger/items.js';
 import { mealSlot } from '../src/ledger/taxonomy.js';

@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Dates and clocks, in the user's zone.
 //

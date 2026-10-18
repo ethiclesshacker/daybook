@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Browser client for Apple Health.
 //

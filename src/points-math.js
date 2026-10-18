@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Card points arithmetic — pure, import-free, shared by the Dashboard and
 // the Points screen. Both used to carry their own copy of `calcPoints` and

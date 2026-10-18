@@ -1,3 +1,4 @@
+// @ts-check
 // Connector registry.
 //
 // A connector is anything that can answer "what is new since this cursor?" and

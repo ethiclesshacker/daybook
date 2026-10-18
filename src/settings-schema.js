@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // The settings catalogue, on its own and free of imports.
 //

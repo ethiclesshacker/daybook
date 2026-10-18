@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // ======================================================
 // The ledger as an MCP server.
 //

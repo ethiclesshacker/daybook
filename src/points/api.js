@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Browser client for card points (HSBC TravelOne).
 //

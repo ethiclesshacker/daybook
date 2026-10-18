@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // ======================================================
 // Font Awesome, cut down to the icons this app draws.
 //

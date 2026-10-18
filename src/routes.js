@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // The screens, in navigation order — the one list the router validates
 // hashes against and the sidebar is drawn from. This used to be three

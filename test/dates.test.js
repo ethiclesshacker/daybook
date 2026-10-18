@@ -1,3 +1,4 @@
+// @ts-check
 // Run with: npm test
 // The zone arithmetic every timeline row, summary and range query rests on.
 // Every function here used to exist as two or three copies; these pin the one

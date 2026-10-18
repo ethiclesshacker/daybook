@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // The one way a browser module talks to Postgres.
 //

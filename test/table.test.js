@@ -1,3 +1,4 @@
+// @ts-check
 // Tests for the table rules: sort by what a value is, search what is shown,
 // page anywhere. Every case is a way the Grid.js tables got it wrong.
 

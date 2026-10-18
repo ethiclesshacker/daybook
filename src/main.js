@@ -1,3 +1,4 @@
+// @ts-check
 import { supabase } from './supabase.js';
 import './vendor.js';
 import { loadSettings } from './settings.js';

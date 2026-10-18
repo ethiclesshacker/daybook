@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Configuration for the ingestion jobs.
 //

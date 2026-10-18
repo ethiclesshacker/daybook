@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Third-party UI assets, bundled rather than loaded from CDNs.
 //
