@@ -1,9 +1,8 @@
 import { supabase } from './supabase.js';
 import './vendor.js';
 import { loadSettings } from './settings.js';
-import { renderLogin } from './views/login.js';
 import { renderApp } from './views/app.js';
-import { applyChartDefaults, installCallListener, fatalPanel } from './utils.js';
+import { installCallListener, fatalPanel } from './utils.js';
 import './style.css';
 
 // Which user is currently painted on screen.
@@ -23,20 +22,22 @@ async function render(session) {
   renderedUserId = userId;
 
   if (userId) {
-    // Every view reads settings synchronously, so they have to be in hand
-    // before the shell mounts. loadSettings never rejects — a missing table or
-    // a network blip falls back to the schema defaults.
-    await loadSettings();
+    // The shell paints now and settings arrive alongside the first view's own
+    // queries. This used to `await loadSettings()` first, which put a whole
+    // round trip in front of every other request on a cold load. Views that
+    // need a personal number to paint await settings.ready() together with
+    // their data; loadSettings never rejects — a missing table or a network
+    // blip falls back to the schema defaults.
+    loadSettings();
     renderApp(session);
   } else {
+    // Loaded on demand: a signed-in visit never needs the login screen.
+    const { renderLogin } = await import('./views/login.js');
     renderLogin();
   }
 }
 
 async function init() {
-  // Apply Chart.js global defaults once — all views share these settings.
-  applyChartDefaults();
-
   // Buttons in generated table markup (Edit, Delete, Confirm…) run through one
   // delegated listener, because the production CSP refuses inline handlers.
   installCallListener();

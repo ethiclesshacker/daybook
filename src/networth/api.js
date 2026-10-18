@@ -9,14 +9,18 @@
 
 import { supabase } from '../supabase.js';
 import { unwrap } from '../rpc.js';
+import { cached, invalidate, invalidating } from '../cache.js';
 
 const TABLE = 'net_worth_entries';
 
-/** Every snapshot, oldest first — the order every chart and projection wants. */
+/** Every snapshot, oldest first — the order every chart and projection wants. Cached per session. */
 export const listEntries = () =>
-  unwrap(supabase.from(TABLE).select('*').order('date', { ascending: true }));
+  cached('networth:entries', () => unwrap(supabase.from(TABLE).select('*').order('date', { ascending: true })));
+
+/** Drop the cached snapshots, so the next read goes to the database. */
+export const refresh = () => invalidate('networth');
 
 /** Insert or update one snapshot. `payload.id` set means update. */
-export const saveEntry = payload => unwrap(supabase.from(TABLE).upsert([payload]));
+export const saveEntry = invalidating('networth', payload => unwrap(supabase.from(TABLE).upsert([payload])));
 
-export const deleteEntry = id => unwrap(supabase.from(TABLE).delete().eq('id', id));
+export const deleteEntry = invalidating('networth', id => unwrap(supabase.from(TABLE).delete().eq('id', id)));
