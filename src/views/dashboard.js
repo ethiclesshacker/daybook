@@ -20,11 +20,12 @@ import { listTransactions, listRedemptions } from '../points/api.js';
 import { EUR_INR_FALLBACK } from '../constants.js';
 import * as settings from '../settings.js';
 import {
-  formatINR, formatINRFull, formatPercent, destroyChart, fetchEURtoINR, escapeHTML,
+  formatINR, formatINRFull, formatPercent, destroyChart, fetchEURtoINR, cachedEURtoINR, escapeHTML,
   computeNet, computeAssets, computeLiquid, computeEmergencyFund,
-  renderKpiCards, bannerHTML, todayISO,
+  renderKpiCards, bannerHTML, todayISO, formatDate, formatShortDate,
 } from '../utils.js';
 import { netWorthSeriesChart, allocationDoughnut, wireChartToggle } from '../charts.js';
+import { budgetStatus } from '../budget.js';
 import { pointsSummary } from '../points-math.js';
 import { impliedSavingsRate, monthsBetween } from '../finance.js';
 import { shiftISO, formatHours, meanOf, latestOf } from '../health/summary.js';
@@ -39,6 +40,9 @@ let loadToken = 0;
 
 // A snapshot older than this is worth a nudge: the KPIs below all read it.
 const STALE_SNAPSHOT_DAYS = 45;
+// The Today strip is the phone's last sync. Past this it is dimmed: steps
+// "so far" from a sync at 9am are not what you have walked by 4pm.
+const STALE_SYNC_MS = 3 * 60 * 60 * 1000;
 
 export async function renderDashboard(container) {
   container.innerHTML = `
@@ -79,7 +83,7 @@ export async function renderDashboard(container) {
       <div class="chart-card" id="dash-today-card">
         <div class="chart-header">
           <div>
-            <div class="chart-title">Today</div>
+            <div class="chart-title">Today <span class="dash-asof" id="dash-today-asof"></span></div>
             <div class="chart-subtitle">Sleep, movement and food, from Apple Health and the ledger</div>
           </div>
           <button type="button" class="btn-sm btn-accent" data-goto="health">
@@ -249,7 +253,8 @@ async function loadDashboardData() {
     });
   ledger.reviewQueue(50)
     .then(rows => {
-      const n = Array.isArray(rows) ? rows.length : 0;
+      // The RPC answers { total, events }; an array was the pre-0004 shape.
+      const n = Array.isArray(rows) ? rows.length : Number(rows?.total ?? rows?.events?.length ?? 0);
       if (n) todo.add('review', {
         icon: 'fa-inbox', goto: 'ledger', action: 'Review',
         text: `${n}${n >= 50 ? '+' : ''} ledger event${n === 1 ? '' : 's'} waiting for review`,
@@ -257,10 +262,17 @@ async function loadDashboardData() {
     })
     .catch(() => {});
 
-  let entries, transactions, redemptions, eurRate;
+  // The EUR rate only values the points balance, so it never holds the page:
+  // draw with the cached (or fallback) rate now, redraw the strip if a fresh
+  // one arrives. It used to sit in this Promise.all, so a slow frankfurter.dev
+  // kept every KPI on its skeleton.
+  let eurRate = cachedEURtoINR() ?? EUR_INR_FALLBACK;
+  const freshRate = cachedEURtoINR() === null ? fetchEURtoINR(EUR_INR_FALLBACK) : null;
+
+  let entries, transactions, redemptions;
   try {
-    [entries, transactions, redemptions, eurRate] = await Promise.all([
-      listEntries(), listTransactions(), listRedemptions(), fetchEURtoINR(EUR_INR_FALLBACK),
+    [entries, transactions, redemptions] = await Promise.all([
+      listEntries(), listTransactions(), listRedemptions(), settings.ready(),
     ]);
   } catch (err) {
     // A failed query used to be swallowed by `?.data || []`, so a network drop
@@ -293,7 +305,7 @@ async function loadDashboardData() {
   if (heroEl) heroEl.textContent = entries.length ? formatINRFull(netWorth) : '—';
   if (changeEl && prev) {
     const isPos = nwChange >= 0;
-    changeEl.innerHTML = `<span class="${isPos ? 'is-up' : 'is-down'}">${isPos ? '↑' : '↓'} ${Math.abs(nwChange).toFixed(1)}%</span> from last snapshot`;
+    changeEl.innerHTML = `<span class="${isPos ? 'is-up' : 'is-down'}">${isPos ? '↑' : '↓'} ${Math.abs(nwChange).toFixed(1)}%</span> from last snapshot (${escapeHTML(formatShortDate(prev.date))})`;
   } else if (changeEl) {
     changeEl.textContent = entries.length ? 'First snapshot' : 'No data yet';
   }
@@ -302,16 +314,15 @@ async function loadDashboardData() {
   if (latest?.date) {
     const ageDays = Math.round(monthsBetween(String(latest.date).slice(0, 10), todayISO()) * 30.4375);
     const allocSub = document.getElementById('dash-alloc-sub');
-    if (allocSub) allocSub.textContent = `Snapshot of ${formatDay(latest.date)}`;
+    if (allocSub) allocSub.textContent = `Snapshot of ${formatDate(latest.date)}`;
     if (ageDays > STALE_SNAPSHOT_DAYS) todo.add('snapshot', {
       icon: 'fa-camera', goto: 'networth', action: 'Update',
-      text: `Last net worth snapshot was ${formatAge(ageDays)} ago (${formatDay(latest.date)})`,
+      text: `Last net worth snapshot was ${formatAge(ageDays)} ago (${formatDate(latest.date)})`,
     });
   }
 
   // ── Points ────────────────────────────────────────────
   const pointsPerEur = settings.get('points_per_eur');
-  const pts = pointsSummary(transactions, redemptions, { pointsPerEur, eurRate });
   const rewardTarget = settings.get('cc_reward_target_rate');
   // Rows made from card alerts arrive as a guess until you look at them.
   const assumed = transactions.filter(t => t.basis === 'assumed').length;
@@ -320,8 +331,37 @@ async function loadDashboardData() {
     text: `${assumed} card spend${assumed === 1 ? '' : 's'} labelled from a rule, not yet confirmed`,
   });
 
-  const fxBadge = document.getElementById('fx-badge');
-  if (fxBadge) fxBadge.textContent = `· 1 EUR = ₹${eurRate.toFixed(0)}`;
+  const paintPoints = rate => {
+    const pts = pointsSummary(transactions, redemptions, { pointsPerEur, eurRate: rate });
+    const fxBadge = document.getElementById('fx-badge');
+    if (fxBadge) fxBadge.textContent = `· 1 EUR = ₹${rate.toFixed(0)}`;
+    renderStrip(document.getElementById('points-strip'), [
+      {
+        label: 'Accrued',
+        value: Math.round(pts.totalAccrued).toLocaleString('en-IN') + ' pts',
+        sub: `${transactions.length} transactions`,
+        tone: pts.totalAccrued > 0 ? 'success' : undefined,
+      },
+      {
+        label: 'Redeemed',
+        value: Math.round(pts.totalRedeemed).toLocaleString('en-IN') + ' pts',
+        sub: `Value: ${formatINRFull(pts.totalRdValue)}`,
+        tone: pts.totalRedeemed > 0 ? 'danger' : undefined,
+      },
+      {
+        label: 'Balance value',
+        value: formatINRFull(pts.balanceINR),
+        sub: `${pts.balanceEUR.toFixed(0)} EUR`,
+        tone: 'accent',
+      },
+      {
+        label: 'Reward rate',
+        value: formatPercent(pts.rewardRate),
+        sub: pts.rewardRate >= rewardTarget ? `Above the ${rewardTarget}% target` : `Target: above ${rewardTarget}%`,
+        tone: pts.rewardRate >= rewardTarget ? 'success' : 'warning',
+      },
+    ]);
+  };
 
   // ── KPIs ──────────────────────────────────────────────
   const fiTarget      = settings.fiTarget();
@@ -369,38 +409,16 @@ async function loadDashboardData() {
       tone: runwayOK ? 'success' : 'warning',
       value: runway.toFixed(1), unit: 'months', raw: runway.toFixed(1),
       badge: { text: runwayOK ? 'Healthy' : 'Build up', type: runwayOK ? 'positive' : 'neutral' },
-      sub: `${basis === 'cash_like' ? 'Cash + FDs' : 'Liquid'} ÷ ₹${(monthlyExp / 1000).toFixed(0)}k/mo`,
+      sub: `${basis === 'cash_like' ? 'Cash + FDs' : 'Liquid'} ÷ ${formatINRFull(monthlyExp)}/mo`,
       tooltip: `${basis === 'cash_like' ? 'Cash and fixed deposits' : 'Cash, stocks and mutual funds'} ÷ monthly baseline expenses. Target ≥ ${runwayTarget} months.`,
     },
   ]);
 
   // ── Points Strip ──────────────────────────────────────
-  renderStrip(document.getElementById('points-strip'), [
-    {
-      label: 'Accrued',
-      value: Math.round(pts.totalAccrued).toLocaleString('en-IN') + ' pts',
-      sub: `${transactions.length} transactions`,
-      tone: 'success',
-    },
-    {
-      label: 'Redeemed',
-      value: Math.round(pts.totalRedeemed).toLocaleString('en-IN') + ' pts',
-      sub: `Value: ${formatINRFull(pts.totalRdValue)}`,
-      tone: 'danger',
-    },
-    {
-      label: 'Balance value',
-      value: formatINRFull(pts.balanceINR),
-      sub: `${pts.balanceEUR.toFixed(0)} EUR`,
-      tone: 'accent',
-    },
-    {
-      label: 'Reward rate',
-      value: formatPercent(pts.rewardRate),
-      sub: pts.rewardRate >= rewardTarget ? `Above the ${rewardTarget}% target` : `Target: above ${rewardTarget}%`,
-      tone: pts.rewardRate >= rewardTarget ? 'success' : 'warning',
-    },
-  ]);
+  paintPoints(eurRate);
+  freshRate?.then(rate => {
+    if (token === loadToken && rate !== eurRate) { eurRate = rate; paintPoints(rate); }
+  });
 
   buildNetWorthChart(entries, 'line');
   allocationChart = destroyChart(allocationChart);
@@ -424,12 +442,12 @@ function renderStrip(el, items) {
   `).join('');
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// "14 Sep 2026" is utils.formatDate now — the one date style for the app.
 
-/** "14 Sep 2026" from an ISO date. */
-function formatDay(iso) {
-  const [y, m, d] = String(iso).slice(0, 10).split('-').map(Number);
-  return `${d} ${MONTHS[m - 1]} ${y}`;
+/** The browser-local calendar date of an instant, as YYYY-MM-DD. */
+function localISODate(date) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 function formatAge(days) {
@@ -487,22 +505,43 @@ async function renderDayAndMonth(token) {
   const weekStart = shiftISO(today, -7);
   const from = weekStart < monthStart ? weekStart : monthStart;
 
-  const [days, stats] = await Promise.all([
+  const [days, stats, catalog] = await Promise.all([
     health.days(from, today),
     ledger.stats(new Date(`${monthStart}T00:00:00`).toISOString(), null).catch(() => null),
+    // Only for "as of": when the phone last synced. Optional.
+    health.catalog().catch(() => null),
+    settings.ready(),
   ]);
   if (token !== loadToken) return;
 
   const list = Array.isArray(days) ? days : [];
-  renderToday(list.filter(d => d.day >= weekStart), today);
+  renderToday(list.filter(d => d.day >= weekStart), today, catalog?.last_sync_at || null);
   renderMonth(list.filter(d => d.day >= monthStart), stats, today);
 }
 
 // ── Today ────────────────────────────────────────────────
 
-function renderToday(days, today) {
+function renderToday(days, today, lastSyncAt) {
   const el = document.getElementById('dash-today');
   if (!el) return;
+
+  // "as of 14:05": a strip of numbers "so far today" means nothing without
+  // the moment they were true. Dimmed once the sync is over three hours old.
+  const asOf = document.getElementById('dash-today-asof');
+  const stale = lastSyncAt ? Date.now() - new Date(lastSyncAt).getTime() > STALE_SYNC_MS : false;
+  if (asOf) {
+    if (lastSyncAt) {
+      const when = new Date(lastSyncAt);
+      const sameDay = todayISO() === localISODate(when);
+      const clock = when.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+      asOf.textContent = `as of ${sameDay ? clock : `${formatShortDate(localISODate(when))} ${clock}`}`;
+      asOf.title = `Apple Health last synced ${when.toLocaleString('en-IN')}`;
+      asOf.classList.toggle('is-stale', stale);
+    } else {
+      asOf.textContent = '';
+    }
+  }
+  el.classList.toggle('is-stale', stale);
 
   // life_days nests body fields; the Health helpers read them flat.
   const flat = days.map(d => ({ day: d.day, ...(d.body || {}) }));
@@ -559,7 +598,7 @@ function renderToday(days, today) {
       label: 'Weight',
       value: weight ? `${weight.value.toFixed(1)} kg` : '—',
       sub: weight
-        ? `${weight.day === today ? 'Today' : formatDay(weight.day).slice(0, -5)}${weightDelta != null ? ` · ${weightDelta > 0 ? '+' : weightDelta < 0 ? '−' : '±'}${Math.abs(weightDelta).toFixed(1)} this week` : ''}`
+        ? `${weight.day === today ? 'Today' : formatShortDate(weight.day)}${weightDelta != null ? ` · ${weightDelta > 0 ? '+' : weightDelta < 0 ? '−' : '±'}${Math.abs(weightDelta).toFixed(1)} this week` : ''}`
         : 'Not measured this week',
     },
   ]);
@@ -593,35 +632,38 @@ function renderMonth(days, stats, today) {
   const budget = settings.get('monthly_expenses');
 
   // Pace, not just position: a third of the way through the month, half the
-  // budget gone is the thing worth knowing.
+  // budget gone is the thing worth knowing. The thresholds and the wording
+  // live in src/budget.js: red at 125% of budget, amber when over pace.
   const [y, m, dayOfMonth] = today.split('-').map(Number);
   const daysInMonth = new Date(y, m, 0).getDate();
-  const expected = budget * (dayOfMonth / daysInMonth);
-  const overPace = expected > 0 && personal > expected * 1.1;
-  const pct = budget > 0 ? Math.min((personal / budget) * 100, 100) : 0;
+  const status = budgetStatus({ spent: personal, budget, dayOfMonth, daysInMonth, money: formatINR });
+  const toneClass = status.tone === 'ok' ? '' : `is-${status.tone}`;
+  const { bar } = status;
 
   const categories = Object.entries(stats?.spend?.by_category || {})
     .sort((a, b) => b[1] - a[1]).slice(0, 5);
 
-  const note = overPace
-      ? `Ahead of pace — ${formatINRFull(personal - expected)} above where day ${dayOfMonth} would put you.`
-      : `On pace. Day ${dayOfMonth} of ${daysInMonth}.`;
-
   strip.innerHTML = `
     <div class="life-strip">
       <div class="life-spend">
-        <div class="life-spend-value mono">${escapeHTML(formatINRFull(personal))}</div>
+        <div class="life-spend-value mono ${toneClass}">${escapeHTML(formatINRFull(personal))}</div>
         <div class="life-spend-sub">
           personal, across ${events} event${events === 1 ? '' : 's'}
           ${work ? ` · plus ${escapeHTML(formatINRFull(work))} work` : ''}
           · budget ${escapeHTML(formatINRFull(budget))}
         </div>
-        <div class="progress-wrap life-bar">
-          <div class="progress-bar ${overPace ? 'is-over' : ''}" style="width:${pct.toFixed(1)}%"></div>
-          <span class="life-pace" style="left:${Math.min((dayOfMonth / daysInMonth) * 100, 100).toFixed(1)}%"
+        <div class="progress-wrap life-bar ${toneClass}" role="img"
+             aria-label="${escapeHTML(`${formatINRFull(personal)} of a ${formatINRFull(budget)} budget`)}">
+          <div class="progress-bar" style="width:${bar.fill.toFixed(1)}%"></div>
+          ${bar.overflow > 0 ? `<div class="life-overflow ${bar.beyond ? 'is-beyond' : ''}"
+               style="left:${bar.fill.toFixed(1)}%;width:${bar.overflow.toFixed(1)}%"
+               title="${escapeHTML(formatINRFull(status.over))} over budget"></div>` : ''}
+          ${bar.budgetMark !== null ? `<span class="life-budget-mark" style="left:${bar.budgetMark.toFixed(1)}%"
+               title="Budget: ${escapeHTML(formatINRFull(budget))}"></span>` : ''}
+          <span class="life-pace" style="left:${bar.pace.toFixed(1)}%"
                 title="Where the month is: day ${dayOfMonth} of ${daysInMonth}"></span>
         </div>
-        <div class="life-spend-note ${overPace ? 'is-over' : ''}">${escapeHTML(note)}</div>
+        <div class="life-spend-note ${toneClass}">${escapeHTML(status.note)}</div>
       </div>
       <div class="life-cats">
         ${categories.length ? categories.map(([key, value]) => `

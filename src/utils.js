@@ -1,33 +1,101 @@
-import { Chart } from './vendor.js';
-
 // ======================================================
 // Formatting utilities
+//
+// Money has one rule, in three shapes:
+//
+//   formatINRFull  — hero figures and anything read on its own: every rupee,
+//                    Indian grouping. "₹12,34,567".
+//   formatINR      — compact, for KPI footnotes, tooltips and table cells:
+//                    lakh and crore with two decimals, and plain grouping
+//                    below a lakh. "₹4.50 L", "₹1.20 Cr", "₹45,000". There is
+//                    no "k": a column that read "₹80.0k" above "₹1.20 L" made
+//                    the eye compare two different units.
+//   inrAxisTick    — chart axes: "₹0", "₹40L", "₹1.2Cr". An axis whose top
+//                    tick is under a lakh uses plain grouping throughout.
+//
+// A table column picks one scale for all its rows with inrColumnFormatter.
 // ======================================================
 
-export function formatINR(value, decimals = 0) {
-  if (value === null || value === undefined || isNaN(value)) return '—';
+const INR_UNITS = [
+  { min: 1e7, div: 1e7, unit: 'Cr' },
+  { min: 1e5, div: 1e5, unit: 'L' },
+];
+
+// Sign goes in front of the ₹, not inside the number — "−₹1.20 Cr", not "₹-1.20 Cr".
+const signOf = value => (value < 0 ? '−' : '');
+
+const isMissing = value => value === null || value === undefined || value === '' || Number.isNaN(Number(value));
+
+export function formatINR(value) {
+  if (isMissing(value)) return '—';
+  value = Number(value);
   const abs = Math.abs(value);
-  // Sign goes in front of the ₹, not inside the number — "−₹1.20 Cr", not "₹-1.20 Cr".
-  const sign = value < 0 ? '−' : '';
-  let formatted;
-  if (abs >= 1e7) {
-    formatted = (abs / 1e7).toFixed(2) + ' Cr';
-  } else if (abs >= 1e5) {
-    formatted = (abs / 1e5).toFixed(2) + ' L';
-  } else if (abs >= 1000) {
-    formatted = (abs / 1000).toFixed(1) + 'k';
-  } else {
-    formatted = abs.toFixed(decimals);
-  }
-  return sign + '₹' + formatted;
+  const scale = INR_UNITS.find(u => abs >= u.min);
+  if (!scale) return formatINRFull(value);
+  return `${signOf(value)}₹${(abs / scale.div).toFixed(2)} ${scale.unit}`;
 }
 
 export function formatINRFull(value) {
-  if (value === null || value === undefined || isNaN(value)) return '—';
+  if (isMissing(value)) return '—';
+  value = Number(value);
   // Keep the sign. Math.abs() alone rendered a negative net worth as a healthy
   // positive number — the worst possible way for this app to be wrong.
-  const sign = value < 0 ? '−' : '';
-  return sign + '₹' + Math.abs(value).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+  return signOf(value) + '₹' + Math.abs(value).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+}
+
+/**
+ * One formatter for a whole column: if any row reaches a lakh, every row is
+ * written in lakh (or crore, for rows that reach one), so ₹45,000 reads as
+ * "₹0.45 L" beside "₹3.20 L" and the decimals line up down the column.
+ */
+export function inrColumnFormatter(values) {
+  const max = Math.max(0, ...values.map(v => Math.abs(Number(v) || 0)));
+  if (max < 1e5) return formatINRFull;
+  return value => {
+    if (isMissing(value)) return '—';
+    value = Number(value);
+    const abs = Math.abs(value);
+    const scale = abs >= 1e7 ? INR_UNITS[0] : INR_UNITS[1];
+    return `${signOf(value)}₹${(abs / scale.div).toFixed(2)} ${scale.unit}`;
+  };
+}
+
+/** Axis tick: "₹0", "₹40L", "₹1.2Cr"; plain grouping when the axis tops out under a lakh. */
+export function inrAxisTick(value, _index, ticks) {
+  const v = Number(value);
+  if (!v) return '₹0';
+  const top = Array.isArray(ticks) && ticks.length
+    ? Math.max(...ticks.map(t => Math.abs(Number(t.value) || 0)))
+    : Math.abs(v);
+  const abs = Math.abs(v);
+  if (top < 1e5) return signOf(v) + '₹' + abs.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+  const trim = n => String(Number(n.toFixed(1)));
+  return abs >= 1e7
+    ? `${signOf(v)}₹${trim(abs / 1e7)}Cr`
+    : `${signOf(v)}₹${trim(abs / 1e5)}L`;
+}
+
+// An amount in the currency it was charged in: "₹1,200", "$25.00", "€9.99".
+// Ledger events carry `data.currency`; rupees stay whole, everything else
+// keeps its cents, because $25 and ₹25 are not the same kind of number.
+const CURRENCY_SYMBOLS = { INR: '₹', USD: '$', EUR: '€', GBP: '£', SGD: 'S$', JPY: '¥' };
+
+export function formatMoney(amount, currency = 'INR', { exact = false } = {}) {
+  if (isMissing(amount)) return '—';
+  const n = Number(amount);
+  const code = String(currency || 'INR').toUpperCase();
+  if (code === 'INR') {
+    return exact && !Number.isInteger(n)
+      ? signOf(n) + '₹' + Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : formatINRFull(n);
+  }
+  const symbol = CURRENCY_SYMBOLS[code] ?? `${code} `;
+  return signOf(n) + symbol + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** True for an amount the browser may add into a rupee total (no currency means INR). */
+export function isINR(currency) {
+  return !currency || String(currency).toUpperCase() === 'INR';
 }
 
 export function formatPercent(value, decimals = 1) {
@@ -35,10 +103,36 @@ export function formatPercent(value, decimals = 1) {
   return value.toFixed(decimals) + '%';
 }
 
-export function formatDate(dateStr) {
+// ── Dates ──────────────────────────────────────────────
+//
+// One style across the app: "5 Oct 2026", or "5 Oct" where the year is
+// obvious. Own month table rather than toLocaleDateString, whose output
+// ("05-Oct-2026", "Sept") changes with the browser's ICU.
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "5 Oct 2026" from an ISO date or timestamp (its calendar date, as written). */
+export function formatDate(dateStr, { year = true } = {}) {
   if (!dateStr) return '—';
-  const d = new Date(dateStr + 'T00:00:00');
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  const [y, m, d] = String(dateStr).slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return '—';
+  return year ? `${d} ${MONTHS[m - 1]} ${y}` : `${d} ${MONTHS[m - 1]}`;
+}
+
+/** "5 Oct" — for a footnote, or anywhere the year goes without saying. */
+export function formatShortDate(dateStr) {
+  return formatDate(dateStr, { year: false });
+}
+
+/** "just now", "12 min ago", "3 h ago", "4 days ago", "2 months ago". */
+export function timeAgo(iso, now = Date.now()) {
+  const mins = Math.max(0, Math.round((now - new Date(iso).getTime()) / 60000));
+  if (mins < 2) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  if (mins < 48 * 60) return `${Math.round(mins / 60)} h ago`;
+  const days = Math.round(mins / 1440);
+  if (days < 60) return `${days} days ago`;
+  return `${Math.round(days / 30.44)} months ago`;
 }
 
 export function todayISO() {
@@ -53,42 +147,29 @@ export function todayISO() {
 // Chart helpers
 // ======================================================
 
-export const CHART_COLORS = {
-  accent:  '#38bdf8',
-  purple:  '#a78bfa',
-  success: '#10b981',
-  warning: '#f59e0b',
-  danger:  '#ef4444',
-  pink:    '#f472b6',
-  teal:    '#2dd4bf',
-  orange:  '#fb923c',
+// Read off the design tokens in style.css, so a chart and the card around it
+// cannot drift apart. Getters, because the tokens resolve only once the
+// stylesheet has loaded; the hex after each is the fallback for that moment
+// and for node. (Chart.js global defaults — font, colour, tension — now live
+// in src/chart-setup.js, with the library itself.)
+const tokenColor = (name, fallback) => () => cssVar(name, fallback);
+const COLOR_TOKENS = {
+  accent:  tokenColor('--accent', '#38bdf8'),
+  purple:  tokenColor('--purple', '#a78bfa'),
+  success: tokenColor('--success', '#10b981'),
+  warning: tokenColor('--warning', '#f59e0b'),
+  danger:  tokenColor('--danger-solid', '#ef4444'),   // fills and lines, never text
+  pink:    tokenColor('--pink', '#f472b6'),
+  teal:    tokenColor('--teal', '#2dd4bf'),
+  orange:  () => '#fb923c',                           // no token; used for one series
+  muted:   tokenColor('--text-muted', '#8b9ab0'),
 };
+export const CHART_COLORS = Object.defineProperties({}, Object.fromEntries(
+  Object.entries(COLOR_TOKENS).map(([key, get]) => [key, { get, enumerable: true }])));
 
-export const ASSET_COLORS = {
-  stocks:       '#38bdf8',
-  mutual_funds: '#a78bfa',
-  cash:         '#10b981',
-  epf:          '#f59e0b',
-  gold:         '#f472b6',
-  fds:          '#2dd4bf',
-};
-
-const CHART_DEFAULTS = {
-  color: '#94a3b8',
-  borderColor: 'rgba(148,163,184,0.1)',
-  // The bundled face registers as 'Inter Variable' (@fontsource-variable), not
-  // 'Inter'. A canvas font string with only an unknown family falls back to
-  // the browser default — which is how every chart spent months quietly
-  // rendering its ticks in Times New Roman.
-  font: { family: "'Inter Variable', Inter, system-ui, sans-serif", size: 11 },
-};
-
-export function applyChartDefaults() {
-  Chart.defaults.color = CHART_DEFAULTS.color;
-  Chart.defaults.borderColor = CHART_DEFAULTS.borderColor;
-  Chart.defaults.font.family = CHART_DEFAULTS.font.family;
-  Chart.defaults.font.size = CHART_DEFAULTS.font.size;
-}
+const ASSET_TONES = { stocks: 'accent', mutual_funds: 'purple', cash: 'success', epf: 'warning', gold: 'pink', fds: 'teal' };
+export const ASSET_COLORS = Object.defineProperties({}, Object.fromEntries(
+  Object.entries(ASSET_TONES).map(([key, tone]) => [key, { get: COLOR_TOKENS[tone], enumerable: true }])));
 
 export function destroyChart(chartRef) {
   if (chartRef) {
@@ -103,6 +184,12 @@ export function destroyChart(chartRef) {
 
 let toastTimeout = null;
 
+/**
+ * A short message in the corner. `message` is plain text: it is set with
+ * textContent, so an error string that carries a merchant name or a server
+ * message cannot become markup. (It used to be innerHTML, and every caller
+ * had to remember to escape.)
+ */
 export function showToast(message, type = 'success') {
   const existing = document.querySelector('.toast');
   if (existing) existing.remove();
@@ -111,7 +198,10 @@ export function showToast(message, type = 'success') {
   const icon = type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle';
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
-  toast.innerHTML = `<i class="fas ${icon}"></i> ${message}`;
+  // An error interrupts; a confirmation waits its turn.
+  toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  toast.innerHTML = `<i class="fas ${icon}" aria-hidden="true"></i>`;
+  toast.append(document.createTextNode(' ' + String(message ?? '')));
   document.body.appendChild(toast);
 
   toastTimeout = setTimeout(() => toast.remove(), 3000);
@@ -249,6 +339,11 @@ export function installCallListener(root = document) {
   });
 }
 
+/**
+ * Edit and delete for one row. Delete is drawn quiet — muted until the row is
+ * hovered or the button has focus — so a column of red bins is not the
+ * loudest thing on a table of money (style.css, .row-actions).
+ */
 export function rowActions(editCall, deleteCall, noun = 'row') {
   return `
     <div class="row-actions">
@@ -263,10 +358,23 @@ export function rowActions(editCall, deleteCall, noun = 'row') {
 // CSV Export
 // ======================================================
 
+/**
+ * One CSV cell. A value that starts with = + - @ (or a tab / carriage return)
+ * is a formula to Excel and Sheets — a merchant called "=HYPERLINK(...)"
+ * from an email would run on open — so it gets a leading apostrophe.
+ * Numbers are left alone: -250 is a refund, not a formula.
+ */
+export function csvCell(cell) {
+  if (typeof cell === 'number') return String(cell);
+  let text = String(cell ?? '');
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
 export function downloadCSV(headers, rows, filename) {
   const csvContent = [
-    headers.join(','),
-    ...rows.map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
+    headers.map(csvCell).join(','),
+    ...rows.map(row => row.map(csvCell).join(','))
   ].join('\n');
   downloadBlob(csvContent, 'text/csv;charset=utf-8;', filename);
 }
@@ -293,6 +401,11 @@ export function downloadBlob(content, mime, filename) {
 // ======================================================
 
 let modalOnClose = null;
+// Where focus was before the modal opened, so closing it puts focus back on
+// the button that opened it rather than at the top of the document.
+let modalReturnFocus = null;
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 
 /**
  * @param {object} opts
@@ -308,7 +421,10 @@ let modalOnClose = null;
  *                called; not when another openModal replaces it.
  */
 export function openModal({ title = '', icon = '', iconColor = '', tabs = '', body = '', footer = '', footerClass = '', onClose = null } = {}) {
-  closeModal({ silent: true });
+  // A modal replacing a modal (detail → edit) keeps the original opener.
+  const replacing = Boolean(document.getElementById('modal-overlay'));
+  if (!replacing) modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  closeModal({ silent: true, restoreFocus: false });
   modalOnClose = onClose;
 
   const overlay = document.createElement('div');
@@ -333,19 +449,54 @@ export function openModal({ title = '', icon = '', iconColor = '', tabs = '', bo
     // The backdrop, or anything marked as a way out.
     if (e.target === overlay || e.target.closest('[data-close]')) closeModal();
   });
-  document.addEventListener('keydown', handleEscape);
+  document.addEventListener('keydown', handleModalKeys);
+
+  // Focus goes into the dialog: the first field if there is one (a form is
+  // opened to be filled in), otherwise the dialog itself. Callers that focus
+  // something specific afterwards still win.
+  const dialog = overlay.querySelector('.modal');
+  dialog.tabIndex = -1;
+  const first = overlay.querySelector('.modal-body input:not([type="hidden"]):not([disabled]), .modal-body select:not([disabled]), .modal-body textarea:not([disabled])');
+  (first || dialog).focus({ preventScroll: true });
 }
 
-function handleEscape(e) {
-  if (e.key === 'Escape') closeModal();
+function handleModalKeys(e) {
+  // A control inside the modal that used Escape itself — a combobox closing
+  // its list, a filter panel — has said so with preventDefault. Without this
+  // check one Escape closed the list *and* the whole dialog under it.
+  if (e.key === 'Escape') {
+    if (e.defaultPrevented) return;
+    closeModal();
+    return;
+  }
+  if (e.key === 'Tab') trapFocus(e);
 }
 
-export function closeModal({ silent = false } = {}) {
+/** Keep Tab inside the open dialog: aria-modal says so, the keyboard has to agree. */
+function trapFocus(e) {
+  const dialog = document.querySelector('#modal-overlay .modal');
+  if (!dialog) return;
+  const items = [...dialog.querySelectorAll(FOCUSABLE)].filter(el => el.getClientRects().length > 0);
+  if (!items.length) { e.preventDefault(); dialog.focus(); return; }
+  const first = items[0];
+  const last = items[items.length - 1];
+  const active = document.activeElement;
+  if (!dialog.contains(active)) { e.preventDefault(); first.focus(); return; }
+  if (e.shiftKey && (active === first || active === dialog)) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+}
+
+export function closeModal({ silent = false, restoreFocus = true } = {}) {
   const overlay = document.getElementById('modal-overlay');
   if (overlay) overlay.remove();
-  document.removeEventListener('keydown', handleEscape);
+  document.removeEventListener('keydown', handleModalKeys);
   const done = modalOnClose;
   modalOnClose = null;
+  if (restoreFocus && overlay) {
+    const target = modalReturnFocus;
+    modalReturnFocus = null;
+    if (target?.isConnected) target.focus({ preventScroll: true });
+  }
   if (!silent && typeof done === 'function') done();
 }
 
@@ -462,6 +613,21 @@ export function escapeHTML(value) {
   return String(value).replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
 }
 
+/**
+ * A URL that is safe to put in an href: absolute http(s) only. A source's
+ * `external_url` comes out of an email, and `javascript:` in an href runs on
+ * click whatever escaping was applied to it. Returns null for anything else.
+ */
+export function safeHttpUrl(value) {
+  if (!value) return null;
+  try {
+    const url = new URL(String(value));
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 // ======================================================
 // Canvas colour resolution
 //
@@ -471,6 +637,7 @@ export function escapeHTML(value) {
 // ======================================================
 
 export function cssVar(name, fallback = '#000000') {
+  if (typeof document === 'undefined') return fallback;
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return value || fallback;
 }
@@ -479,14 +646,47 @@ export function cssVar(name, fallback = '#000000') {
 // FX Rate
 // ======================================================
 
-export async function fetchEURtoINR(fallback = 110.0) {
+// The rate is published once a working day, so a copy from this morning is
+// as good as a fresh one. It is kept in localStorage for six hours: a reload
+// costs no request at all, and a dead API (or a slow one — there is a 4s
+// timeout now) can no longer hold a screen hostage.
+const FX_KEY = 'finance-hub-fx-eur-inr';
+const FX_TTL_MS = 6 * 60 * 60 * 1000;
+const FX_TIMEOUT_MS = 4000;
+let fxInFlight = null;
+
+/** The last rate this browser fetched, if it is recent enough to use. Synchronous. */
+export function cachedEURtoINR() {
   try {
-    const res = await fetch('https://api.frankfurter.dev/v1/latest?base=EUR&symbols=INR');
-    const data = await res.json();
-    return data?.rates?.INR ?? fallback;
-  } catch {
-    return fallback;
-  }
+    const stored = JSON.parse(localStorage.getItem(FX_KEY) || 'null');
+    if (stored && Number.isFinite(stored.rate) && Date.now() - stored.at < FX_TTL_MS) return stored.rate;
+  } catch { /* private window or a malformed value: no cache */ }
+  return null;
+}
+
+export async function fetchEURtoINR(fallback = 110.0) {
+  const cached = cachedEURtoINR();
+  if (cached !== null) return cached;
+  // Two screens asking at once share one request.
+  fxInFlight ??= (async () => {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = setTimeout(() => controller?.abort(), FX_TIMEOUT_MS);
+    try {
+      const res = await fetch('https://api.frankfurter.dev/v1/latest?base=EUR&symbols=INR', { signal: controller?.signal });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const rate = Number(data?.rates?.INR);
+      if (!Number.isFinite(rate) || rate <= 0) return null;
+      try { localStorage.setItem(FX_KEY, JSON.stringify({ rate, at: Date.now() })); } catch { /* not persisted */ }
+      return rate;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+      fxInFlight = null;
+    }
+  })();
+  return (await fxInFlight) ?? fallback;
 }
 
 // ======================================================
@@ -613,7 +813,7 @@ export function wireCombobox(id) {
       e.preventDefault();
       commit(items[active].dataset.value);
     } else if (e.key === 'Escape' && !list.hidden) {
-      e.preventDefault();                     // close the list, not the modal
+      e.preventDefault();                     // close the list, not the modal (handleModalKeys checks this)
       close();
     }
   });
