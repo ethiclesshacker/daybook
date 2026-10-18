@@ -1,10 +1,17 @@
-# A missing hashed asset is a real 404, not the app shell. Without this line
-# the fallback below answered a stale /assets/views-abc123.js with index.html
-# and a 200, and the browser failed to parse HTML as a script — the screen
-# simply never loaded. With code-split views that is the deploy-under-an-open-
-# tab case, and the router shows "reload" when a chunk fails.
-/assets/*  /assets/:splat  404
+# A missing hashed asset has to be a real 404, not the app shell: the old
+# fallback answered a stale /assets/views-abc123.js with index.html and a 200,
+# and the browser failed to parse HTML as a script. With code-split views that
+# is the deploy-under-an-open-tab case (the router then shows "reload").
+#
+# Tested on a preview deploy (2026-10-18): Pages does not honour a 404 rule
+# here — `/assets/*  /missing-asset.html  404` still returned index.html with a
+# 200. What works is public/404.html: once it exists, Pages serves it with a 404
+# for every path that is not a file, and that page refreshes a person on a
+# stray path back to /. So the rule is kept only as a record:
+# /assets/*  /404.html  404
 
-# SPA fallback. Routing is hash-based, so deep links already resolve, but this
-# keeps a stray /networth (or a mistyped path) on the app instead of a 404.
+# SPA fallback. Routing is hash-based, so deep links already resolve. With
+# public/404.html present Pages answers unknown paths with that page instead
+# (which sends people to /), so this line no longer changes anything; it is
+# left so that removing 404.html restores the old behaviour.
 /*    /index.html   200
