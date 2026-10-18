@@ -373,26 +373,28 @@ function readForm(id) {
   return out;
 }
 
+// showToast() writes plain text now (utils.js), so the toasts below pass
+// names and messages as they are; escaping them showed "&amp;" literally.
 async function save(id) {
   if (!id) return;
   let fields;
-  try { fields = readForm(id); } catch (err) { showToast(escapeHTML(err.message), 'error'); return; }
+  try { fields = readForm(id); } catch (err) { showToast(err.message, 'error'); return; }
   if (!fields) return;
   try {
     if (id === 'new') {
       const created = await api.createFoodItem(fields);
       rows = [...rows, created];
-      showToast(`Added ${escapeHTML(created.display_name)}`);
+      showToast(`Added ${created.display_name}`);
     } else {
       const updated = await api.updateFoodItem(id, fields);
       rows = rows.map(r => (r.id === id ? updated : r));
       const count = usage.get(updated.normalized_name)?.count || 0;
-      showToast(`Saved ${escapeHTML(updated.display_name)}${count ? ` — re-valued ${count} line item${count === 1 ? '' : 's'}` : ''}`);
+      showToast(`Saved ${updated.display_name}${count ? ` — re-valued ${count} line item${count === 1 ? '' : 's'}` : ''}`);
     }
     editingId = null; resetArmed = null;
     paint();
   } catch (err) {
-    showToast(escapeHTML(err.message), 'error');
+    showToast(err.message, 'error');
   }
 }
 
@@ -403,9 +405,9 @@ async function reset(id) {
     rows = rows.map(r => (r.id === id ? updated : r));
     editingId = null; resetArmed = null;
     paint();
-    showToast(`${escapeHTML(updated.display_name)} will be estimated again on the next nutrition run`);
+    showToast(`${updated.display_name} will be estimated again on the next nutrition run`);
   } catch (err) {
-    showToast(escapeHTML(err.message), 'error');
+    showToast(err.message, 'error');
   }
 }
 
@@ -417,10 +419,10 @@ async function merge(duplicateId) {
   try {
     const res = await api.mergeFoodItems(targetId, duplicateId);
     mergingId = null;
-    showToast(`Merged ${escapeHTML(res.duplicate)} into ${escapeHTML(res.target)} — ${res.events_updated} meal${res.events_updated === 1 ? '' : 's'} rewritten`);
+    showToast(`Merged ${res.duplicate} into ${res.target} — ${res.events_updated} meal${res.events_updated === 1 ? '' : 's'} rewritten`);
     await load();
   } catch (err) {
     if (btn) btn.disabled = false;
-    showToast(escapeHTML(err.message), 'error');
+    showToast(err.message, 'error');
   }
 }

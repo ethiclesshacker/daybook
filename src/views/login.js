@@ -1,5 +1,4 @@
 import { supabase } from '../supabase.js';
-import { escapeHTML } from '../utils.js';
 
 /**
  * Sign-in is a one-time code mailed by Supabase: enter the email, then type
@@ -87,9 +86,21 @@ export function renderLogin() {
 
   let email = '';
 
-  function showStatus(msg, type) {
-    status.innerHTML = msg;
+  /**
+   * `parts` is text, or a list of text and nodes (see strong()). Never HTML:
+   * this used to be innerHTML, and the messages carry server error strings —
+   * and, before the email-code flow, an `error_description` read straight off
+   * the URL, which made the login page an injection point.
+   */
+  function showStatus(parts, type) {
+    status.replaceChildren(...[].concat(parts).map(p => (typeof p === 'string' ? document.createTextNode(p) : p)));
     status.className = `login-status ${type}`;
+  }
+
+  function strong(text) {
+    const el = document.createElement('strong');
+    el.textContent = text;
+    return el;
   }
 
   /** Disable a button and swap its label for a spinner; returns the restorer. */
@@ -137,12 +148,12 @@ export function renderLogin() {
       showStatus(
         error.code === 'otp_disabled'
           ? 'No account uses that email.'
-          : `Error: ${escapeHTML(error.message || 'Could not send the code. Please try again.')}`,
+          : `Error: ${error.message || 'Could not send the code. Please try again.'}`,
         'error'
       );
       return;
     }
-    showStatus(`Code sent to <strong>${escapeHTML(email)}</strong>. Enter it below.`, 'success');
+    showStatus(['Code sent to ', strong(email), '. Enter it below.'], 'success');
     codeInput.value = '';
     showStep('code');
   });
@@ -170,7 +181,7 @@ export function renderLogin() {
     showStatus(
       expired
         ? 'That code is wrong or has expired. Check it, or send a new one.'
-        : `Error: ${escapeHTML(error.message || 'Could not sign in. Please try again.')}`,
+        : `Error: ${error.message || 'Could not sign in. Please try again.'}`,
       'error'
     );
     codeInput.select();
@@ -185,8 +196,8 @@ export function renderLogin() {
     const error = await sendCode(resendBtn);
     showStatus(
       error
-        ? `Error: ${escapeHTML(error.message || 'Could not send the code. Please try again.')}`
-        : `New code sent to <strong>${escapeHTML(email)}</strong>. Earlier codes no longer work.`,
+        ? `Error: ${error.message || 'Could not send the code. Please try again.'}`
+        : ['New code sent to ', strong(email), '. Earlier codes no longer work.'],
       error ? 'error' : 'success'
     );
     codeInput.value = '';

@@ -24,7 +24,18 @@ import { escapeHTML, showToast, parseNum, formatINR, withBusy } from '../utils.j
 let draft = {};
 let saved = {};
 
+/** A rupee field: shown with digit grouping, edited as plain digits. */
+const isMoney = spec => spec.type === 'number' && spec.prefix === '₹';
+const grouped = value => (Number.isFinite(Number(value)) ? Number(value).toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '');
+const readNumber = text => parseNum(String(text).replace(/[,\s₹]/g, ''));
+
 export async function renderSettings(container) {
+  // Boot no longer waits for user_settings before painting, so this screen
+  // does — it is the one screen that shows the stored values themselves.
+  if (!container.querySelector('.set-body')) {
+    container.innerHTML = '<div class="page-body"><div class="skeleton skeleton--table"></div></div>';
+  }
+  await settings.ready();
   draft = settings.all();
   saved = settings.all();
 
@@ -41,11 +52,8 @@ export async function renderSettings(container) {
         <div class="set-groups">
           ${SETTING_GROUPS.map(groupMarkup).join('')}
 
-          <p class="settings-footnote">
-            Stored per user in <code>user_settings</code> as key/value pairs, so a new
-            setting never needs a database migration. Anything left untouched falls
-            back to its default.
-          </p>
+          <!-- Developer note (user_settings key/value storage) hidden from the screen; it is in the README. -->
+          <!-- <p class="settings-footnote">Stored per user in <code>user_settings</code> as key/value pairs…</p> -->
         </div>
 
         <aside class="set-aside" aria-label="Derived figures">
@@ -66,16 +74,26 @@ export async function renderSettings(container) {
 
   Object.keys(SETTINGS_SCHEMA).forEach(key => {
     const input = document.getElementById(`set-${key}`);
+    const spec = SETTINGS_SCHEMA[key];
     input?.addEventListener('input', () => {
-      const spec = SETTINGS_SCHEMA[key];
-      draft[key] = spec.type === 'number' ? parseNum(input.value) : input.value;
+      draft[key] = spec.type === 'number' ? readNumber(input.value) : input.value;
       reflectField(key);
       renderDerived();
       reflectBar();
     });
 
+    // ₹93,795 to read, 93795 to edit: grouping while typing moves the caret.
+    if (isMoney(spec) && input) {
+      input.addEventListener('focus', () => { input.value = draft[key] ? String(draft[key]) : ''; });
+      input.addEventListener('blur', () => { input.value = grouped(draft[key]); });
+    }
+
     document.getElementById(`reset-${key}`)?.addEventListener('click', () => resetOne(key));
   });
+
+  // Every field's state on arrival, not only after a keystroke: "Reset to
+  // default" for a saved value used to appear only once you had typed in it.
+  Object.keys(SETTINGS_SCHEMA).forEach(reflectField);
 
   document.getElementById('set-save')?.addEventListener('click', save);
   document.getElementById('set-revert')?.addEventListener('click', async () => {
@@ -131,14 +149,15 @@ function fieldMarkup(key, spec) {
     : `<div class="set-input ${spec.prefix ? 'has-prefix' : ''} ${spec.suffix ? 'has-suffix' : ''}">
          ${spec.prefix ? `<span class="set-affix is-prefix" aria-hidden="true">${escapeHTML(spec.prefix)}</span>` : ''}
          <input
-           type="${spec.type === 'number' ? 'number' : 'text'}"
+           type="${spec.type === 'number' && !isMoney(spec) ? 'number' : 'text'}"
+           ${isMoney(spec) ? 'inputmode="decimal" autocomplete="off"' : ''}
            class="form-input"
            id="set-${key}"
-           value="${escapeHTML(value)}"
-           ${spec.min !== undefined ? `min="${spec.min}"` : ''}
-           ${spec.max !== undefined ? `max="${spec.max}"` : ''}
-           ${spec.step !== undefined ? `step="${spec.step}"` : ''}
-           ${spec.hint ? `aria-describedby="hint-${key}"` : ''}
+           value="${escapeHTML(isMoney(spec) ? grouped(value) : value)}"
+           ${spec.min !== undefined && !isMoney(spec) ? `min="${spec.min}"` : ''}
+           ${spec.max !== undefined && !isMoney(spec) ? `max="${spec.max}"` : ''}
+           ${spec.step !== undefined && !isMoney(spec) ? `step="${spec.step}"` : ''}
+           aria-describedby="${spec.hint ? `hint-${key} ` : ''}clamp-${key}"
          />
          ${spec.suffix ? `<span class="set-affix is-suffix" aria-hidden="true">${escapeHTML(spec.suffix)}</span>` : ''}
        </div>`;
@@ -150,6 +169,7 @@ function fieldMarkup(key, spec) {
         <span class="set-field-state" id="state-${key}"></span>
       </div>
       ${control}
+      <p class="set-clamp" id="clamp-${key}" role="status" hidden></p>
       ${spec.hint ? `<p class="form-hint" id="hint-${key}">${escapeHTML(spec.hint)}</p>` : ''}
     </div>
   `;
@@ -171,6 +191,20 @@ function reflectField(key) {
   const isChanged = draft[key] !== saved[key];
   const isDefault = draft[key] === SETTINGS_SCHEMA[key].default;
   field.classList.toggle('is-changed', isChanged);
+
+  // Out of bounds is clamped on save (settings.js coerce). Say so while
+  // typing, rather than letting 500 quietly become 50.
+  const spec = SETTINGS_SCHEMA[key];
+  const clamp = document.getElementById(`clamp-${key}`);
+  if (clamp && spec.type === 'number') {
+    const v = Number(draft[key]);
+    const msg = spec.max !== undefined && v > spec.max ? `Above the maximum — it will be saved as ${spec.max.toLocaleString('en-IN')}.`
+      : spec.min !== undefined && v < spec.min ? `Below the minimum — it will be saved as ${spec.min.toLocaleString('en-IN')}.`
+      : '';
+    clamp.textContent = msg;
+    clamp.hidden = !msg;
+    field.classList.toggle('is-clamped', Boolean(msg));
+  }
 
   if (isChanged) {
     state.innerHTML = '<span class="set-chip">Edited</span>';
@@ -205,6 +239,8 @@ function renderDerived() {
   const surplus  = settings.budgetedSurplus(draft);
   const rate     = settings.budgetedSavingsRate(draft);
   const realRet  = settings.realReturnRate(draft) * 100;
+  const expected = draft.wealth_score_divisor > 0
+    ? (draft.age * draft.monthly_net_income * 12) / draft.wealth_score_divisor : 0;
 
   const items = [
     { label: 'Annual expenses',       value: formatINR(annual),
@@ -217,6 +253,8 @@ function renderDerived() {
       note: 'Surplus as a share of income' },
     { label: 'Real return',           value: realRet.toFixed(2) + '%', warn: realRet <= 0,
       note: realRet <= 0 ? 'Inflation is eating the return' : 'After inflation' },
+    { label: 'Expected net worth for your age', value: formatINR(expected),
+      note: `Age × annual income ÷ ${draft.wealth_score_divisor}; the wealth score is your net worth ÷ this` },
   ];
 
   el.innerHTML = `
@@ -245,7 +283,7 @@ async function resetOne(key) {
   saved[key] = value;
 
   const input = document.getElementById(`set-${key}`);
-  if (input) input.value = value;
+  if (input) input.value = isMoney(SETTINGS_SCHEMA[key]) ? grouped(value) : value;
   reflectField(key);
   renderDerived();
   reflectBar();

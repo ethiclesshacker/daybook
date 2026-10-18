@@ -14,19 +14,29 @@
 
 import * as api from '../ledger/api.js';
 import { EVENT_TYPES, STATUSES, SOURCE_TYPES, SUBTYPES, typeMeta, statusMeta, sourceMeta } from '../ledger/taxonomy.js';
-import { parseQuickEntry } from '../ledger/nlparse.js';
+// import { parseQuickEntry } from '../ledger/nlparse.js';  // now loaded on demand, see loadParser()
 import { summariseItems } from '../ledger/items.js';
 import { localDateISO } from '../ledger/normalize.js';
-import { formatTime as fmtTime, formatDayHeading, toLocalInput } from '../ledger/dates.js';
+import { formatTime as fmtTime, formatDayHeading, toLocalInput, dayStartISO } from '../ledger/dates.js';
 import { isInflow, moneyFlow } from '../ledger/summary.js';
 import * as settings from '../settings.js';
 import {
-  escapeHTML, formatINRFull, openModal, closeModal, showToast, todayISO, downloadCSV, downloadBlob,
-  comboboxHTML, wireCombobox, renderKpiCards, emptyState,
+  escapeHTML, formatINRFull, formatMoney, isINR, openModal, closeModal, showToast, todayISO, downloadCSV, downloadBlob,
+  comboboxHTML, wireCombobox, renderKpiCards, emptyState, safeHttpUrl, timeAgo,
 } from '../utils.js';
+
+// The sentence parser is 1,100 lines of rules that only the quick-add dialog
+// uses, so it is its own chunk, fetched when that dialog opens.
+let parserModule = null;
+const loadParser = () => (parserModule ??= import('../ledger/nlparse.js'));
+
+// The timeline asks for this many at a time; "Load more" asks for the next page.
+const PAGE = 200;
 
 let events = [];
 let summaries = {};
+// How many events match what is on screen, of which `events` holds the first
+// few hundred. It was read and never shown, so a truncated list looked whole.
 let total = 0;
 let activeTab = 'timeline';       // timeline | review
 let filters = { query: '', types: [], statuses: [], sourceTypes: [], from: null, to: null };
@@ -67,11 +77,11 @@ export async function renderLedger(container) {
 
       <div class="table-section vp-panel">
         <div class="table-toolbar fd-toolbar">
-          <div class="table-tabs">
-            <button type="button" class="table-tab active" id="lg-tab-timeline">
+          <div class="table-tabs" role="tablist" aria-label="Life views">
+            <button type="button" class="table-tab active" id="lg-tab-timeline" role="tab" aria-selected="true">
               <i class="fas fa-stream" aria-hidden="true"></i>Timeline
             </button>
-            <button type="button" class="table-tab" id="lg-tab-review">
+            <button type="button" class="table-tab" id="lg-tab-review" role="tab" aria-selected="false">
               <i class="fas fa-circle-question" aria-hidden="true"></i>Review
               <span class="kpi-badge neutral" id="lg-review-count">0</span>
             </button>
@@ -79,7 +89,7 @@ export async function renderLedger(container) {
           <div class="lg-controls">
             <div class="search-input-wrap lg-search">
               <i class="fas fa-search"></i>
-              <input type="text" class="search-input" id="lg-search" placeholder="Search the ledger" />
+              <input type="search" class="search-input" id="lg-search" placeholder="Search the ledger" aria-label="Search the ledger" />
             </div>
             <details class="lg-filters" id="lg-filters">
               <summary title="Narrow the timeline">
@@ -139,7 +149,7 @@ export async function renderLedger(container) {
   document.getElementById('lg-tab-timeline').addEventListener('click', () => switchTab('timeline'));
   document.getElementById('lg-tab-review').addEventListener('click', () => switchTab('review'));
   document.getElementById('lg-fab').addEventListener('click', () => openQuickAdd());
-  document.getElementById('lg-refresh-btn').addEventListener('click', () => loadData());
+  document.getElementById('lg-refresh-btn').addEventListener('click', () => { api.refresh(); loadData(); });
   document.getElementById('lg-export-btn').addEventListener('click', exportLedger);
 
   document.getElementById('lg-search').addEventListener('input', e => {
@@ -228,8 +238,11 @@ function zoneSuffix() {
 
 async function switchTab(tab) {
   activeTab = tab;
-  document.getElementById('lg-tab-timeline').classList.toggle('active', tab === 'timeline');
-  document.getElementById('lg-tab-review').classList.toggle('active', tab === 'review');
+  for (const [name, el] of [['timeline', 'lg-tab-timeline'], ['review', 'lg-tab-review']]) {
+    const button = document.getElementById(el);
+    button?.classList.toggle('active', tab === name);
+    button?.setAttribute('aria-selected', String(tab === name));
+  }
   await loadData();
 }
 
@@ -240,13 +253,18 @@ async function loadData() {
   if (container) container.innerHTML = `<div class="skeleton skeleton--table"></div>`;
 
   try {
-    const [result, review, runs, written] = await Promise.all([
-      activeTab === 'review' ? api.reviewQueue(100) : api.searchEvents({ ...filters, limit: 200 }),
-      api.reviewQueue(100),
+    const [result, review, runs, written, kpiStats] = await Promise.all([
+      activeTab === 'review' ? api.reviewQueue(PAGE) : api.searchEvents({ ...filters, limit: PAGE }),
+      api.reviewQueue(PAGE),
       api.recentRuns(3).catch(() => []),
       // Written nightly from the same events. Missing summaries are normal —
       // a day the job has not reached yet simply has none.
       api.dailySummaries(null, null).catch(() => ({})),
+      // The header numbers come from ledger_stats over fixed windows, never
+      // from the list below: they used to be counted off `events`, so the
+      // Review tab or a filter quietly changed what "Today" and "7 days" meant.
+      loadKpiStats().catch(() => null),
+      settings.ready(),
     ]);
     if (token !== loadToken || !container?.isConnected) return;
 
@@ -259,7 +277,7 @@ async function loadData() {
     const badge = document.getElementById('lg-review-count');
     if (badge) badge.textContent = reviewCount;
 
-    renderKPIs(reviewCount);
+    renderKPIs(reviewCount, kpiStats);
     renderIngestBadge(runs);
     renderTimeline();
   } catch (err) {
@@ -286,11 +304,7 @@ function renderIngestBadge(runs) {
     return;
   }
 
-  const when = new Date(last.started_at);
-  const minutes = Math.round((Date.now() - when.getTime()) / 60000);
-  const ago = minutes < 60 ? `${minutes}m ago`
-            : minutes < 1440 ? `${Math.round(minutes / 60)}h ago`
-            : `${Math.round(minutes / 1440)}d ago`;
+  const ago = timeAgo(last.started_at);
 
   const tone = last.status === 'succeeded' ? 'badge-green'
              : last.status === 'partial' ? 'badge-yellow' : 'badge-red';
@@ -299,23 +313,41 @@ function renderIngestBadge(runs) {
   badge.title = `${last.status} — ${last.items_seen} seen, ${last.events_created} created, ${last.events_updated} updated`;
 }
 
-function renderKPIs(reviewCount) {
+/**
+ * The header's three windows, from ledger_stats: today and the last seven
+ * days on the ledger's clock, and everything (for the share that arrived by
+ * itself). Spend is the server's total, which applies the one money-flow rule
+ * and — as the currency work lands — converts non-rupee amounts; the browser
+ * adding up `data.amount` mixed dollars into rupees.
+ */
+function loadKpiStats() {
+  const zone = timeZone();
+  const today = localDateISO(new Date(), zone);
+  const weekStart = localDateISO(new Date(Date.now() - 6 * 86_400_000), zone);
+  const startOf = day => dayStartISO(day, zone);
+  return Promise.all([
+    api.stats(startOf(today), null),
+    api.stats(startOf(weekStart), null),
+    api.stats(null, null),
+  ]).then(([day, week, all]) => ({ day, week, all }));
+}
+
+const plural = (n, word) => `${n.toLocaleString('en-IN')} ${word}${n === 1 ? '' : 's'}`;
+
+function renderKPIs(reviewCount, kpiStats) {
   const grid = document.getElementById('lg-stats');
   if (!grid) return;
 
-  const zone = timeZone();
-  const today = localDateISO(new Date(), zone);
-  const weekAgo = localDateISO(new Date(Date.now() - 6 * 86_400_000), zone);
-
-  const spendOf = list => list.reduce((sum, e) => {
-    const amount = Number(e.data?.amount);
-    return sum + (Number.isFinite(amount) && !isInflow(e) ? amount : 0);
-  }, 0);
-
-  const todayEvents = events.filter(e => localDateISO(e.occurred_at, zone) === today);
-  const weekEvents = events.filter(e => localDateISO(e.occurred_at, zone) >= weekAgo);
-  const auto = events.filter(e => e.source_type !== 'manual' && e.source_type !== 'hermes').length;
-  const autoPct = events.length ? Math.round((auto / events.length) * 100) : 0;
+  const count = s => Number(s?.event_count) || 0;
+  const spend = s => Number(s?.spend?.total) || 0;
+  const todayCount = count(kpiStats?.day);
+  const weekCount = count(kpiStats?.week);
+  const allCount = count(kpiStats?.all);
+  const bySource = kpiStats?.all?.by_source || {};
+  const byHand = (Number(bySource.manual) || 0) + (Number(bySource.hermes) || 0);
+  const auto = Math.max(allCount - byHand, 0);
+  const autoPct = allCount ? Math.round((auto / allCount) * 100) : 0;
+  const missing = kpiStats ? '' : 'unavailable';
 
   // Full cards, not the header chips these used to be. The chips existed
   // because four cards pushed a *scrolling* timeline down to three visible
@@ -323,15 +355,17 @@ function renderKPIs(reviewCount) {
   // longer cost it anything. Same trade, opposite answer.
   renderKpiCards(grid, [
     { id: 'lg-kpi-today', label: 'Today', icon: 'fa-calendar-day',
-      value: String(todayEvents.length || '—'),
-      sub: todayEvents.length ? formatINRFull(spendOf(todayEvents)) : 'nothing yet',
-      raw: todayEvents.length },
+      // "3 events", not a bare "3" beside the word Today.
+      value: todayCount ? todayCount.toLocaleString('en-IN') : '—', unit: todayCount ? (todayCount === 1 ? 'event' : 'events') : '',
+      sub: missing || (todayCount ? `${formatINRFull(spend(kpiStats.day))} spent` : 'nothing yet'),
+      raw: todayCount },
     { id: 'lg-kpi-week', label: '7 days', icon: 'fa-calendar-week', tone: 'teal',
-      value: String(weekEvents.length), sub: formatINRFull(spendOf(weekEvents)),
-      raw: weekEvents.length },
+      value: weekCount.toLocaleString('en-IN'), unit: weekCount === 1 ? 'event' : 'events',
+      sub: missing || `${formatINRFull(spend(kpiStats.week))} spent`,
+      raw: weekCount },
     { id: 'lg-kpi-auto', label: 'Automatic', icon: 'fa-wand-magic-sparkles', tone: 'purple',
-      value: `${autoPct}%`, sub: `${auto} of ${events.length} events`,
-      tooltip: 'Events the ledger filled in by itself, from email and card alerts',
+      value: `${autoPct}%`, sub: missing || `${auto.toLocaleString('en-IN')} of ${plural(allCount, 'event')}`,
+      tooltip: 'Events the ledger filled in by itself, from email and card alerts, across the whole ledger',
       raw: autoPct },
     { id: 'lg-kpi-review', label: 'To review', icon: 'fa-circle-question',
       tone: reviewCount ? 'warning' : 'success',
@@ -359,6 +393,7 @@ function renderTimeline() {
     container.innerHTML = timelineEmptyState();
     return;
   }
+  const truncated = total > events.length;
 
   const days = new Map();
   for (const event of events) {
@@ -373,9 +408,10 @@ function renderTimeline() {
   container.innerHTML = `<div class="timeline">${[...days.entries()].map(([day, list]) => {
     const heading = day === today ? 'Today' : day === yesterday ? 'Yesterday' : formatDayHeading(day);
     // Money out only. A refund landing on a Tuesday should not read as if the
-    // day cost less than it did.
+    // day cost less than it did. Rupees only: a $20 charge added to ₹ totals
+    // as 20 rupees. TODO: use data.amount_inr once the SQL side provides it.
     const dayTotal = list.reduce((sum, e) =>
-      sum + (isInflow(e) ? 0 : (Number(e.data?.amount) || 0)), 0);
+      sum + (isInflow(e) || !isINR(e.data?.currency) ? 0 : (Number(e.data?.amount) || 0)), 0);
     const written = summaries[day];
 
     return `
@@ -388,23 +424,38 @@ function renderTimeline() {
             </span>
           </div>
           ${written?.summary ? `
-            <button type="button" class="tl-day-summary is-clamped"
+            <div class="tl-day-summary is-clamped" role="button" tabindex="0"
                     aria-expanded="false"
                     title="Written from these events by ${escapeHTML(written.generated_by || 'the system')}">
-              ${escapeHTML(written.summary)}
-            </button>` : ''}
+              ${summaryHTML(written.summary)}
+            </div>` : ''}
         </header>
         ${list.map(renderRow).join('')}
       </section>`;
-  }).join('')}</div>`;
+  }).join('')}</div>
+  ${truncated ? `
+    <div class="lg-more">
+      <span class="lg-more-count">Showing ${events.length.toLocaleString('en-IN')} of ${total.toLocaleString('en-IN')}</span>
+      <button type="button" class="btn-sm btn-ghost" id="lg-load-more">
+        Load ${Math.min(PAGE, total - events.length).toLocaleString('en-IN')} more
+      </button>
+    </div>` : ''}`;
+
+  document.getElementById('lg-load-more')?.addEventListener('click', e => loadMore(e.currentTarget));
 
   // A day's summary opens to full length on click. Clamped, it says enough to
   // decide whether to read on; unclamped on every day, it buries the events it
   // is describing — on a two-event day the paragraph was longer than the day.
+  // A div with a button role rather than a <button>: the summary can now
+  // hold a list, and a list is not allowed inside a button.
   container.querySelectorAll('.tl-day-summary').forEach(el => {
-    el.addEventListener('click', () => {
+    const toggle = () => {
       const open = el.classList.toggle('is-clamped') === false;
       el.setAttribute('aria-expanded', String(open));
+    };
+    el.addEventListener('click', toggle);
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
     });
   });
 
@@ -416,11 +467,80 @@ function renderTimeline() {
   });
 }
 
+/** The next page of the list on screen, appended — no repaint from the top. */
+async function loadMore(button) {
+  const token = loadToken;
+  const scroller = button.closest('.vp-scroll');
+  const keep = scroller ? scroller.scrollTop : window.scrollY;
+  button.disabled = true;
+  button.textContent = 'Loading…';
+  try {
+    const next = activeTab === 'review'
+      // ledger_review_queue has no offset; it is a search on two statuses, so
+      // ask for a longer queue and keep what is new.
+      ? await api.reviewQueue(events.length + PAGE)
+      : await api.searchEvents({ ...filters, limit: PAGE, offset: events.length });
+    if (token !== loadToken) return;
+    const seen = new Set(events.map(e => e.id));
+    events = events.concat((next?.events || []).filter(e => !seen.has(e.id)));
+    total = next?.total ?? total;
+    renderTimeline();
+    if (scroller) scroller.scrollTop = keep; else window.scrollTo(0, keep);
+  } catch (err) {
+    showToast('Could not load more: ' + err.message, 'error');
+    button.disabled = false;
+    button.textContent = 'Try again';
+  }
+}
+
+/**
+ * A day summary as markup. The writer uses markdown-ish dashes for a list of
+ * moments; shown raw they ran together as "- Lunch at … - Cab to …". Lines
+ * starting with "-", "*" or "•" become a list; everything is escaped.
+ */
+function summaryHTML(text) {
+  const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const out = [];
+  let items = [];
+  const flush = () => {
+    if (items.length) out.push(`<ul class="tl-summary-list">${items.map(i => `<li>${escapeHTML(i)}</li>`).join('')}</ul>`);
+    items = [];
+  };
+  for (const line of lines) {
+    const bullet = /^[-*•]\s+(.*)$/.exec(line);
+    if (bullet) { items.push(bullet[1]); continue; }
+    flush();
+    out.push(`<span class="tl-summary-para">${escapeHTML(line)}</span>`);
+  }
+  flush();
+  return out.join('');
+}
+
+/**
+ * Why an event is waiting for you, in words. The queue showed a list of
+ * ordinary-looking rows with nothing to say what was doubtful about them.
+ */
+function reviewReason(event) {
+  const bits = [];
+  const confidence = Number(event.confidence);
+  if (event.confidence !== null && event.confidence !== undefined && Number.isFinite(confidence)) {
+    bits.push(`${Math.round(confidence * 100)}% confident`);
+  }
+  const why = event.inference?.review_reason || event.inference?.reason;
+  if (why) bits.push(String(why));
+  else if (event.inference?.model || event.inference?.llm_note) bits.push('read by the model, not a rule');
+  if (Number.isFinite(Number(event.data?.amount)) && !(event.data?.merchant || event.data?.restaurant || event.data?.place)
+      && !(event.entities || []).length) bits.push('no merchant named');
+  if (event.source_count <= 1 && event.source_type !== 'manual') bits.push('one source');
+  return bits.join(' · ');
+}
+
 function renderRow(event) {
   const type = typeMeta(event.type);
   const status = statusMeta(event.status);
   const source = sourceMeta(event.source_type);
   const amount = Number(event.data?.amount);
+  const currency = event.data?.currency;
   // Green and signed only for money that actually arrived — not for a transfer
   // between your own accounts, which is neither in nor out.
   const inflow = moneyFlow(event) === 'inflow';
@@ -471,11 +591,13 @@ function renderRow(event) {
           ${needsReview ? `<span class="tl-flag" title="${escapeHTML(status.hint)}">Needs review</span>` : ''}
           ${scheduled ? `<span class="tl-flag is-scheduled" title="${escapeHTML(status.hint)}">Scheduled</span>` : ''}
         </div>
+        ${activeTab === 'review' && (needsReview || uncertain) ? `
+          <div class="tl-why"><i class="fas fa-circle-question" aria-hidden="true"></i>${escapeHTML(reviewReason(event) || status.hint)}</div>` : ''}
       </div>
 
       ${Number.isFinite(amount) ? `
-        <div class="tl-amount mono ${inflow ? 'is-in' : ''} ${!inflow && amount >= 5000 ? 'is-large' : ''}">
-          ${inflow ? '+' : ''}${escapeHTML(formatINRFull(amount))}
+        <div class="tl-amount mono ${inflow ? 'is-in' : ''} ${!inflow && isINR(currency) && amount >= 5000 ? 'is-large' : ''}">
+          ${inflow ? '+' : ''}${escapeHTML(formatMoney(amount, currency))}
         </div>` : '<div class="tl-amount"></div>'}
     </article>`;
 }
@@ -573,24 +695,32 @@ async function openDetail(eventId) {
 
       ${event.description ? `<p class="lg-detail-desc">${escapeHTML(event.description)}</p>` : ''}
 
-      ${section('Facts', renderFields(event.data), 'What a source actually stated. Never overwritten by an interpretation.')}
+      ${section('Facts', renderFields(event.data, event.data), 'What a source actually stated. Never overwritten by an interpretation.')}
       ${Object.keys(event.inference || {}).length
-        ? section('Interpretation', renderFields(event.inference), 'Derived, not stated. Safe to disagree with.')
+        ? section('Interpretation', renderFields(event.inference, event.data), 'Derived, not stated. Safe to disagree with.')
         : ''}
 
       ${section('Sources', renderSources(event.sources), 'Every piece of evidence for this event.')}
       ${event.entities?.length ? section('Entities', renderEntities(event.entities)) : ''}
       ${event.related_events?.length ? section('Related events', renderRelated(event.related_events)) : ''}
-      ${event.history?.length ? section('History', renderHistory(event.history), 'Corrections are kept, not silently applied.') : ''}`,
-    footerClass: 'is-wrap',
+      ${event.history?.length ? section('History', renderHistory(event.history), 'Corrections are kept, not silently applied.') : ''}
+      <dl class="lg-facts lg-detail-id">
+        <dt class="lg-fact-key">Event ID</dt>
+        <dd class="lg-fact-value is-wide">${idValue(event.id)}</dd>
+      </dl>`,
+    footerClass: 'is-wrap lg-detail-footer',
+    // Delete sits apart, on the left, in red; Close is where the eye ends, on
+    // the right. They used to be neighbours, one click apart.
     footer: `
-      ${needsAttention ? `<button type="button" class="btn-sm btn-accent" id="lg-confirm-btn"><i class="fas fa-check"></i> Confirm</button>` : ''}
-      <button type="button" class="btn-sm btn-ghost" id="lg-merge-btn"><i class="fas fa-code-merge"></i> Merge</button>
-      <button type="button" class="btn-sm btn-ghost" id="lg-edit-btn"><i class="fas fa-pencil"></i> Edit</button>
-      <button type="button" class="btn-sm btn-ghost" id="lg-dismiss-btn"><i class="fas fa-ban"></i> Dismiss</button>
-      <button type="button" class="btn-sm btn-danger" id="lg-delete-btn"><i class="fas fa-trash"></i> Delete</button>
+      <button type="button" class="btn-sm btn-danger lg-footer-start" id="lg-delete-btn"><i class="fas fa-trash" aria-hidden="true"></i> Delete</button>
+      ${needsAttention ? `<button type="button" class="btn-sm btn-accent" id="lg-confirm-btn"><i class="fas fa-check" aria-hidden="true"></i> Confirm</button>` : ''}
+      <button type="button" class="btn-sm btn-ghost" id="lg-merge-btn"><i class="fas fa-code-merge" aria-hidden="true"></i> Merge</button>
+      <button type="button" class="btn-sm btn-ghost" id="lg-edit-btn"><i class="fas fa-pencil" aria-hidden="true"></i> Edit</button>
+      <button type="button" class="btn-sm btn-ghost" id="lg-dismiss-btn"><i class="fas fa-ban" aria-hidden="true"></i> Dismiss</button>
       <button type="button" class="btn-cancel" data-close>Close</button>`,
   });
+
+  wireCopyButtons();
 
   document.getElementById('lg-confirm-btn')?.addEventListener('click', async () => {
     await mutate(() => api.updateEvent(event.id, { status: 'confirmed' }), 'Confirmed.');
@@ -635,26 +765,71 @@ function section(title, body, hint) {
     </div>`;
 }
 
-function renderFields(data) {
+// Words a key is spelt with that read wrong in sentence case.
+const KEY_WORDS = {
+  id: 'ID', llm: 'LLM', upi: 'UPI', vpa: 'VPA', url: 'URL', utr: 'UTR', otp: 'OTP', inr: 'INR',
+  pnr: 'PNR', gst: 'GST', gstin: 'GSTIN', kcal: 'kcal', ref: 'ref', eta: 'ETA', imap: 'IMAP',
+};
+
+/** "llm_note" → "LLM note", "order_id" → "Order ID". */
+export function humaniseKey(key) {
+  const words = String(key).split(/[_\s]+/).filter(Boolean)
+    .map(w => KEY_WORDS[w.toLowerCase()] ?? w.toLowerCase());
+  if (!words.length) return '';
+  const [first, ...rest] = words;
+  const lead = /^[A-Z]{2,}$/.test(first) || first === 'kcal' ? first : first[0].toUpperCase() + first.slice(1);
+  return [lead, ...rest].join(' ');
+}
+
+/** Identifier-shaped: a key ending in id/ref/number, or one long unbroken token. */
+function isIdentifier(key, value) {
+  if (typeof value !== 'string' && typeof value !== 'number') return false;
+  const text = String(value);
+  return /(^|_)(id|ref|reference|number|no|utr|pnr|txn)$/i.test(key) || (/^\S{20,}$/.test(text) && !/^https?:/i.test(text));
+}
+
+/** An ID: monospace, cut with an ellipsis where it does not fit, and a copy button. */
+function idValue(value) {
+  const text = String(value);
+  return `<span class="lg-id"><span class="lg-id-text mono" title="${escapeHTML(text)}">${escapeHTML(text)}</span>
+    <button type="button" class="btn-icon lg-copy" data-copy="${escapeHTML(text)}" title="Copy" aria-label="Copy ${escapeHTML(text)}">
+      <i class="fas fa-copy" aria-hidden="true"></i></button></span>`;
+}
+
+function wireCopyButtons() {
+  document.querySelectorAll('#modal-overlay .lg-copy').forEach(button => {
+    button.addEventListener('click', () => {
+      navigator.clipboard?.writeText(button.dataset.copy).then(
+        () => showToast('Copied.'),
+        () => showToast('Could not copy — select the text instead.', 'error'));
+    });
+  });
+}
+
+function renderFields(data, facts = data) {
   const entries = Object.entries(data || {}).filter(([, v]) => v !== null && v !== undefined && v !== '');
   if (!entries.length) return '';
   return `<dl class="lg-facts">${entries.map(([key, value]) => {
-    const text = formatValue(key, value);
+    if (isIdentifier(key, value)) {
+      return `
+      <dt class="lg-fact-key">${escapeHTML(humaniseKey(key))}</dt>
+      <dd class="lg-fact-value is-wide">${idValue(value)}</dd>`;
+    }
+    const text = formatValue(key, value, facts);
     // Items lists, addresses and snippets need the whole row; a merchant or an
     // amount does not, and pairing those two-up halves the height.
     const wide = Array.isArray(value) || text.length > 38;
     return `
-      <dt class="lg-fact-key">${escapeHTML(key.replace(/_/g, ' '))}</dt>
-      <dd class="lg-fact-value mono ${wide ? 'is-wide' : ''}">${escapeHTML(text)}</dd>`;
+      <dt class="lg-fact-key">${escapeHTML(humaniseKey(key))}</dt>
+      <dd class="lg-fact-value ${typeof value === 'number' || key === 'amount' ? 'mono' : ''} ${wide ? 'is-wide' : ''}">${escapeHTML(text)}</dd>`;
   }).join('')}</dl>`;
 }
 
-function formatValue(key, value) {
+function formatValue(key, value, facts = {}) {
   // Exact here. The timeline rounds for scanning, but this section is the
-  // record of what a source stated, and ₹94.58 is not ₹95.
+  // record of what a source stated, and ₹94.58 is not ₹95 — and $25 is not ₹25.
   if (key === 'amount' && Number.isFinite(Number(value))) {
-    const amount = Number(value);
-    return Number.isInteger(amount) ? formatINRFull(amount) : `₹${amount.toFixed(2)}`;
+    return formatMoney(Number(value), facts?.currency, { exact: true });
   }
   if (Array.isArray(value)) {
     return value.map(v => (typeof v === 'object' && v !== null ? (v.name || JSON.stringify(v)) : String(v))).join(', ');
@@ -680,8 +855,10 @@ function renderSources(sources) {
           </div>
           ${source.metadata?.snippet ? `<div class="lg-source-snippet">${escapeHTML(source.metadata.snippet)}</div>` : ''}
         </div>
-        ${source.external_url
-          ? `<a class="btn-sm btn-ghost" href="${escapeHTML(source.external_url)}" target="_blank" rel="noopener noreferrer">Open</a>`
+        ${safeHttpUrl(source.external_url)
+          // http(s) only: the URL came out of an email, and a javascript:
+          // href runs on click however well it is escaped.
+          ? `<a class="btn-sm btn-ghost" href="${escapeHTML(safeHttpUrl(source.external_url))}" target="_blank" rel="noopener noreferrer">Open</a>`
           : ''}
       </div>`;
   }).join('')}</div>`;
@@ -721,8 +898,9 @@ function shortActor(actor) {
 }
 
 function formatFullTime(iso) {
+  // "5 Oct 2026, 14:05" — the app's date style, with the time.
   return new Date(iso).toLocaleString('en-IN', {
-    day: '2-digit', month: 'short', year: 'numeric',
+    day: 'numeric', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit', hour12: false, timeZone: timeZone(),
   });
 }
@@ -791,6 +969,11 @@ function openQuickAdd() {
   const input = document.getElementById('lg-add-input');
   const preview = document.getElementById('lg-add-preview');
   let parsed = null;
+  // The parser's chunk starts downloading as the dialog opens; the first
+  // keystroke almost never beats it, and if one does it waits for it.
+  let parseQuickEntry = null;
+  const parserReady = loadParser().then(mod => { parseQuickEntry = mod.parseQuickEntry; });
+  parserReady.catch(err => showToast('Could not load the sentence parser: ' + err.message, 'error'));
 
   const update = () => {
     const value = input.value.trim();
@@ -799,6 +982,7 @@ function openQuickAdd() {
       preview.innerHTML = `<span class="text-muted">Start typing and the parsed event appears here.</span>`;
       return;
     }
+    if (!parseQuickEntry) { parserReady.then(update, () => {}); return; }
 
     parsed = parseQuickEntry(value, { timeZone: timeZone() });
     if (!parsed) return;
@@ -834,6 +1018,7 @@ function openQuickAdd() {
   input.focus();
 
   document.getElementById('lg-add-submit').addEventListener('click', async () => {
+    try { await parserReady; } catch { return; }
     const text = input.value.trim();
     if (!text && !document.getElementById('lg-add-title').value.trim()) {
       showToast('Describe what happened first.', 'error');
