@@ -60,6 +60,10 @@ export async function probe(options = {}) {
                     `${stats.skippedBySubject} skipped on subject · ${stats.skippedTooLarge} too large`));
 
     for (const message of messages) {
+      if (message.parseError) {
+        console.log(`  ${YELLOW('!')} UID ${message.uid} could not be parsed: ${message.parseError}`);
+        continue;
+      }
       const result = extractDeterministic(message, {
         timeZone: config.timeZone,
         selfAddresses: [account.user],

@@ -111,7 +111,9 @@ Two mechanisms keep it there:
 - **The fingerprint cache.** `sender + digit-masked subject shape`. A shape seen
   three times that has never produced an event stops being sent to the model.
   It only ever suppresses negatives, so it cannot hide an event a rule would
-  have caught.
+  have caught. It learns only from verdicts: a source written without the
+  model's answer (model disabled, needs-review) carries `fingerprint_unlearned`
+  instead of `fingerprint`, and `ledger_fingerprint_stats` ignores it.
 
 ### Line items
 
@@ -498,10 +500,32 @@ dismissed event stays dismissed.
 
 ### Checkpoints
 
-Per account and folder: `{uidValidity, lastUid}`. The checkpoint moves **after**
+Per account and folder: `{uidValidity, lastUid, retry?}`. The checkpoint moves **after**
 events are committed, so a crash costs a re-read (free, by design) rather than
 a permanent gap. A changed `UIDVALIDITY` means the server renumbered the
 mailbox, and the folder is rescanned from its lookback window.
+
+A message the run read but could not *judge* gets no source row and no
+verdict: the model call failed (a 401, a timeout, an omitted index), the
+per-run call ceiling stopped short of it, a rule threw, the body would not
+parse, or its write was refused. `lastUid` still moves on, but the message goes
+on the folder's `retry` list (`{uid, message_id, reason, error, attempts, …}`),
+and every run fetches that list again before anything new. Writing those as
+"model returned no event" is how 14–18 October 2026 went missing, and it would
+also have taught the fingerprint cache that the sender never mails events.
+
+`attempts` counts only failures that are the message's own: a parse, rule or
+write error, or a model error in a run where the model answered other batches.
+An outage or the ceiling never counts, so a long outage is simply caught up
+once the key works. After 5 counted attempts the message is written as a
+source with `metadata.needs_review = true` and a `needs review: …` verdict,
+without its fingerprint (so the cache does not learn from it) or snippet; an
+entry that cannot be written even then is dropped after 10 and reported as
+`abandoned` in the run's errors.
+
+A run that left anything on the retry list, or hit any error other than a
+merge conflict, is `partial`; `ledger:ingest` then exits 2 (1 for `failed`),
+so `launchctl list` shows it.
 
 ---
 

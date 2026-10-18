@@ -27,12 +27,20 @@ import { htmlToText, triage } from '../../src/ledger/email.js';
 /**
  * Fetch messages this account has not been seen before.
  *
- * `cursor` is opaque to the pipeline: { folders: { INBOX: { uidValidity, lastUid } } }.
+ * `cursor` is opaque to the pipeline:
+ *   { folders: { INBOX: { uidValidity, lastUid, retry?: [{ uid, attempts, … }] } } }
  * UIDVALIDITY changing means the server renumbered the mailbox, so the stored
  * UID is meaningless and the folder is re-scanned from the lookback window.
  *
- * Returns { messages, cursor, stats }. The cursor is only advanced past
- * messages actually returned, so a crash costs a re-read, never a gap.
+ * `retry` lists UIDs at or below lastUid that an earlier run read but could
+ * not finish (the job maintains it). They are fetched again on every run,
+ * before anything new, until the job takes them off.
+ *
+ * Returns { messages, cursor, stats }. The cursor's lastUid only moves past
+ * messages actually returned, so a crash costs a re-read, never a gap. A
+ * message that fails to parse is returned as a stub with `parseError` set, so
+ * the job can retry it and, eventually, record it — it never stalls the
+ * folder behind it.
  */
 export async function fetchNew(account, cursor = {}, options = {}) {
   const maxMessages = options.maxMessages ?? 200;
@@ -53,19 +61,32 @@ export async function fetchNew(account, cursor = {}, options = {}) {
     socketTimeout: options.socketTimeoutMs ?? 60_000,
   });
 
+  // Without a listener, a dropped socket ("Connection not available") is an
+  // uncaught 'error' event: the process dies, finishRun never runs, and the
+  // run row stays `running` for ever. Record it instead; the command in
+  // flight rejects on its own, and anything that slipped through is thrown
+  // below so the run is marked failed and the checkpoint stays put.
+  let connectionError = null;
+  client.on('error', (err) => { connectionError = connectionError || err; });
+
   const messages = [];
   const nextCursor = { folders: { ...(cursor.folders || {}) } };
-  const stats = { seen: 0, skippedBySubject: 0, skippedTooLarge: 0, fetchedBodies: 0, notReached: 0 };
+  const stats = {
+    seen: 0, skippedBySubject: 0, skippedTooLarge: 0, fetchedBodies: 0, notReached: 0,
+    retried: 0, retryMissing: {}, parseErrors: 0, vanished: 0,
+  };
 
   await client.connect();
   try {
     for (const folder of account.folders) {
       if (messages.length >= maxMessages) break;
+      if (connectionError) throw connectionError;
 
       let lock;
       try {
         lock = await client.getMailboxLock(folder, { readOnly: true });
       } catch (err) {
+        if (connectionError) throw connectionError;
         stats[`error:${folder}`] = err.message;
         continue;
       }
@@ -73,33 +94,50 @@ export async function fetchNew(account, cursor = {}, options = {}) {
       try {
         const uidValidity = String(client.mailbox.uidValidity);
         const stored = nextCursor.folders[folder] || {};
-        const resumable = !ignoreCursor
-                       && stored.uidValidity === uidValidity
-                       && Number.isFinite(Number(stored.lastUid));
+        const sameMailbox = stored.uidValidity === uidValidity;
+        const resumable = !ignoreCursor && sameMailbox && Number.isFinite(Number(stored.lastUid));
         const lastUid = resumable ? Number(stored.lastUid) : 0;
+        // A renumbered mailbox makes the stored retry UIDs meaningless too.
+        const retryUids = sameMailbox
+          ? [...new Set((stored.retry || []).map(r => Number(r.uid)).filter(Number.isFinite))]
+          : [];
 
         // Which UIDs to look at. A fresh folder (or a renumbered one) starts
         // from a date window rather than the whole mailbox — the first run
         // should populate a useful ledger, not import a decade of mail.
-        let candidates = [];
+        const byUid = new Map();
         if (resumable && lastUid > 0) {
           for await (const msg of client.fetch(`${lastUid + 1}:*`, { uid: true, envelope: true, size: true }, { uid: true })) {
             // A range whose start is past the highest UID still returns the
             // last message, per RFC 3501. Filter it out or every run
             // re-processes the newest mail forever.
-            if (msg.uid > lastUid) candidates.push(msg);
+            if (msg.uid > lastUid) byUid.set(msg.uid, msg);
           }
         } else {
           const since = new Date(Date.now() - lookbackDays * 86_400_000);
           const uids = await client.search({ since }, { uid: true });
           if (uids?.length) {
             for await (const msg of client.fetch(uids, { uid: true, envelope: true, size: true }, { uid: true })) {
-              candidates.push(msg);
+              byUid.set(msg.uid, msg);
             }
           }
         }
 
-        candidates.sort((a, b) => a.uid - b.uid);
+        // The retry list: mail an earlier run read but could not finish.
+        const wantedRetries = retryUids.filter(uid => !byUid.has(uid));
+        if (wantedRetries.length) {
+          const found = new Set();
+          for await (const msg of client.fetch(wantedRetries, { uid: true, envelope: true, size: true }, { uid: true })) {
+            byUid.set(msg.uid, msg);
+            found.add(msg.uid);
+          }
+          // Deleted since: nothing left to retry.
+          const missing = wantedRetries.filter(uid => !found.has(uid));
+          if (missing.length) stats.retryMissing[folder] = missing;
+        }
+
+        const candidates = [...byUid.values()].sort((a, b) => a.uid - b.uid);
+        const retrySet = new Set(retryUids);
         stats.seen += candidates.length;
 
         // Cheap pass: reject on subject and size before downloading anything.
@@ -124,9 +162,7 @@ export async function fetchNew(account, cursor = {}, options = {}) {
 
           const envelopeVerdict = triage({
             subject: candidate.envelope?.subject || '',
-            from: candidate.envelope?.from?.[0]
-              ? { name: candidate.envelope.from[0].name, address: candidate.envelope.from[0].address }
-              : null,
+            from: envelopeFrom(candidate),
             headers: {},
             text: candidate.envelope?.subject || '',
             html: '',
@@ -154,39 +190,83 @@ export async function fetchNew(account, cursor = {}, options = {}) {
             try {
               parsed.set(msg.uid, await toMessage(msg, account, folder));
             } catch (err) {
+              // Unparseable mail is handed over as a stub, so the job can
+              // retry it and in the end record it as needs-review. Stopping
+              // here instead stalled the folder for good behind one message
+              // while every run still reported success.
+              stats.parseErrors++;
               stats[`parse_error:${msg.uid}`] = err.message;
+              parsed.set(msg.uid, parseFailureStub(byUid.get(msg.uid) || msg, account, folder, err));
             }
           }
         }
 
-        // Advance the cursor strictly in UID order and stop at the first
-        // message that failed to parse, so nothing is silently skipped.
+        // Advance the cursor strictly in UID order, past every message handed
+        // over. A body that did not come back at all was deleted between the
+        // two fetches: there is nothing left to read.
         let highest = lastUid;
         for (const item of wanted) {
           if (!item.skip) {
             const message = parsed.get(item.uid);
-            if (!message) break;
-            messages.push(message);
+            if (message) {
+              if (retrySet.has(item.uid)) { message.retry = true; stats.retried++; }
+              messages.push(message);
+            } else {
+              stats.vanished++;
+              if (retrySet.has(item.uid)) (stats.retryMissing[folder] ||= []).push(item.uid);
+            }
           }
-          highest = item.uid;
+          highest = Math.max(highest, item.uid);
         }
 
         // Never move the checkpoint backwards. A backfill scans old mail and
         // would otherwise rewind the cursor, making the next forward run
-        // re-read everything since.
-        const previous = (cursor.folders?.[folder]?.uidValidity === uidValidity)
-          ? Number(cursor.folders[folder].lastUid) || 0
-          : 0;
-        nextCursor.folders[folder] = { uidValidity, lastUid: Math.max(highest, previous) };
+        // re-read everything since. The retry list is carried over as it was;
+        // the job, which knows what got processed, rewrites it.
+        const previous = sameMailbox ? Number(stored.lastUid) || 0 : 0;
+        nextCursor.folders[folder] = {
+          uidValidity,
+          lastUid: Math.max(highest, previous),
+          ...(sameMailbox && stored.retry?.length ? { retry: stored.retry } : {}),
+        };
       } finally {
         lock.release();
       }
     }
+    if (connectionError) throw connectionError;
   } finally {
     try { await client.logout(); } catch { client.close(); }
   }
 
   return { messages, cursor: nextCursor, stats };
+}
+
+function envelopeFrom(candidate) {
+  const from = candidate.envelope?.from?.[0];
+  return from ? { name: from.name || null, address: (from.address || '').toLowerCase() } : null;
+}
+
+/**
+ * What can be said about a message whose body would not parse: what the
+ * envelope said, under the same fallback id toMessage() would use.
+ */
+export function parseFailureStub(envelopeMsg, account, folder, err) {
+  const envelope = envelopeMsg?.envelope || {};
+  return {
+    messageId: envelope.messageId || `${account.key}:${folder}:${envelopeMsg.uid}`,
+    accountKey: account.key,
+    folder,
+    uid: envelopeMsg.uid,
+    date: envelope.date || new Date(),
+    subject: envelope.subject || '',
+    from: envelopeFrom(envelopeMsg),
+    to: [],
+    headers: {},
+    text: '',
+    html: '',
+    attachments: [],
+    parseError: String(err?.message || err || 'unparseable message').slice(0, 300),
+  };
 }
 
 /** RFC822 → the shape every extractor in src/ledger/email.js expects. */
