@@ -30,7 +30,9 @@ import { pointsSummary } from '../points-math.js';
 import { impliedSavingsRate, monthsBetween } from '../finance.js';
 import { shiftISO, formatHours, meanOf, latestOf } from '../health/summary.js';
 import { navigateTo } from '../router.js';
-import { categoryMeta } from '../ledger/taxonomy.js';
+import { categoryMeta, typeMeta } from '../ledger/taxonomy.js';
+import { amountInr } from '../ledger/normalize.js';
+import { isInflow } from '../ledger/summary.js';
 
 let netWorthChart = null;
 let clockTimer = null;
@@ -67,42 +69,59 @@ export async function renderDashboard(container) {
 
       <div id="dash-alert"></div>
 
+      <!-- Two columns that size on their own: money on the left (this month,
+           the slow figures, then the chart in whatever height is left), the
+           day on the right (today, then the latest the ledger heard). -->
       <div class="dash-grid">
-        <section class="chart-card dash-card" id="dash-life-card">
-          <button type="button" class="dash-card-title" data-goto="ledger"
-                  title="Recorded personal spending against your monthly budget. Only what reached your inbox or was told to Hermes; cash and anything unrecorded is not here.">
-            This month <i class="fas fa-arrow-right" aria-hidden="true"></i>
-          </button>
-          <div id="dash-life-strip"><div class="skeleton skeleton--strip"></div></div>
-        </section>
-
-        <section class="chart-card dash-card" id="dash-today-card">
-          <button type="button" class="dash-card-title" data-goto="health">
-            Today <span class="dash-asof" id="dash-today-asof"></span> <i class="fas fa-arrow-right" aria-hidden="true"></i>
-          </button>
-          <div class="dash-stats" id="dash-today">
-            ${Array(4).fill(0).map(() => '<div class="skeleton skeleton--stat"></div>').join('')}
-          </div>
-        </section>
-
-        <section class="chart-card dash-card dash-chart-card">
-          <div class="dash-card-head">
-            <button type="button" class="dash-card-title" data-goto="networth">
-              Net worth over time <i class="fas fa-arrow-right" aria-hidden="true"></i>
+        <div class="dash-col">
+          <section class="chart-card dash-card" id="dash-life-card">
+            <button type="button" class="dash-card-title" data-goto="ledger"
+                    title="Recorded personal spending against your monthly budget. Only what reached your inbox or was told to Hermes; cash and anything unrecorded is not here.">
+              This month <i class="fas fa-arrow-right" aria-hidden="true"></i>
             </button>
-            <span class="dash-card-meta" id="dash-assets"></span>
-          </div>
-          <div class="chart-canvas-wrap"><canvas id="dash-nw-chart" role="img" aria-label="Net worth over time"></canvas></div>
-        </section>
+            <div id="dash-life-strip"><div class="skeleton skeleton--strip"></div></div>
+          </section>
 
-        <section class="chart-card dash-card" id="dash-money-card">
-          <button type="button" class="dash-card-title" data-goto="points">
-            Money &amp; points <i class="fas fa-arrow-right" aria-hidden="true"></i>
-          </button>
-          <div class="dash-stats" id="dash-money">
-            ${Array(4).fill(0).map(() => '<div class="skeleton skeleton--stat"></div>').join('')}
-          </div>
-        </section>
+          <section class="chart-card dash-card" id="dash-money-card">
+            <button type="button" class="dash-card-title" data-goto="points">
+              Money &amp; points <i class="fas fa-arrow-right" aria-hidden="true"></i>
+            </button>
+            <div class="dash-stats dash-stats--row" id="dash-money">
+              ${Array(4).fill(0).map(() => '<div class="skeleton skeleton--stat"></div>').join('')}
+            </div>
+          </section>
+
+          <section class="chart-card dash-card dash-chart-card">
+            <div class="dash-card-head">
+              <button type="button" class="dash-card-title" data-goto="networth">
+                Net worth over time <i class="fas fa-arrow-right" aria-hidden="true"></i>
+              </button>
+              <span class="dash-card-meta" id="dash-assets"></span>
+            </div>
+            <div class="chart-canvas-wrap"><canvas id="dash-nw-chart" role="img" aria-label="Net worth over time"></canvas></div>
+          </section>
+        </div>
+
+        <div class="dash-col">
+          <section class="chart-card dash-card" id="dash-today-card">
+            <button type="button" class="dash-card-title" data-goto="health">
+              Today <span class="dash-asof" id="dash-today-asof"></span> <i class="fas fa-arrow-right" aria-hidden="true"></i>
+            </button>
+            <div class="dash-stats" id="dash-today">
+              ${Array(4).fill(0).map(() => '<div class="skeleton skeleton--stat"></div>').join('')}
+            </div>
+          </section>
+
+          <section class="chart-card dash-card dash-latest-card" id="dash-latest-card">
+            <button type="button" class="dash-card-title" data-goto="ledger"
+                    title="The newest entries from email, Edith and you — the quickest place to catch a duplicate or a misread">
+              Latest <i class="fas fa-arrow-right" aria-hidden="true"></i>
+            </button>
+            <ul class="dash-latest" id="dash-latest">
+              ${Array(5).fill(0).map(() => '<li><div class="skeleton skeleton--stat"></div></li>').join('')}
+            </ul>
+          </section>
+        </div>
       </div>
 
     </div>
@@ -187,6 +206,10 @@ async function loadDashboardData() {
       console.warn('[dashboard] life_days:', err?.message || err);
       if (token === loadToken) { removeCard('dash-today-card'); removeCard('dash-life-card'); }
     });
+  renderLatest(token).catch(err => {
+    console.warn('[dashboard] latest:', err?.message || err);
+    if (token === loadToken) removeCard('dash-latest-card');
+  });
   ledger.reviewQueue(50)
     .then(rows => {
       // The RPC answers { total, events }; an array was the pre-0004 shape.
@@ -567,4 +590,44 @@ function renderMonth(days, stats, today) {
       </div>
     </div>
   `;
+}
+
+// ── Latest ───────────────────────────────────────────────
+//
+// The last few things the ledger heard, newest first: an email order, a meal
+// told to Edith, a card alert. It is here so a duplicate or a misread is seen
+// the evening it happens, not in the weekly review.
+
+const LATEST_COUNT = 8;
+const SOURCE_ICON = { email: 'fa-envelope', hermes: 'fa-comment', manual: 'fa-pen' };
+
+async function renderLatest(token) {
+  const result = await ledger.searchEvents({ limit: LATEST_COUNT });
+  if (token !== loadToken) return;
+  const el = document.getElementById('dash-latest');
+  if (!el) return;
+  const events = result?.events || [];
+  if (!events.length) { removeCard('dash-latest-card'); return; }
+
+  const today = todayISO();
+  el.innerHTML = events.map(event => {
+    const day = localISODate(new Date(event.occurred_at));
+    const when = day === today
+      ? new Date(event.occurred_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })
+      : formatShortDate(day);
+    const amount = amountInr(event);
+    const inflow = isInflow(event);
+    const type = typeMeta(event.type);
+    const source = SOURCE_ICON[event.source_type || event.sources?.[0]?.type] || null;
+    // The extractor's titles end in the amount ("Zepto — ₹298"); it has its own column.
+    const title = String(event.title || type.label).replace(/\s*[—–-]\s*[₹$€£]\s?[\d,.]+\s*$/, '');
+    return `
+      <li class="dash-latest-row">
+        <span class="dash-latest-when mono">${escapeHTML(when)}</span>
+        <i class="fas ${type.icon} dash-latest-icon" style="color:${type.color}" aria-hidden="true"></i>
+        <span class="dash-latest-title" title="${escapeHTML(event.title || '')}">${escapeHTML(title)}</span>
+        ${source ? `<i class="fas ${source} dash-latest-src" aria-hidden="true"></i>` : ''}
+        <span class="dash-latest-amount mono ${inflow ? 'is-in' : ''}">${amount !== null && amount > 0 ? escapeHTML((inflow ? '+' : '') + formatINRFull(Math.round(amount))) : ''}</span>
+      </li>`;
+  }).join('');
 }
