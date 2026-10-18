@@ -286,14 +286,15 @@ function renderTable() {
     return { e, net, assets: computeAssets(e), chgPct: prevNet ? ((net - prevNet) / Math.abs(prevNet)) * 100 : null };
   });
 
-  // One scale per column, chosen from every snapshot (not just this page or
+  // One scale for the table, chosen from every snapshot (not just this page or
   // year), so a column never reads "₹80.0k" above "₹1.20 L" and does not
   // change unit as you page or filter. Recomputed on every draw; the column
   // definitions, built once, read it from `columnFormat`.
   const allRows = entries.map(e => ({ e, net: computeNet(e), assets: computeAssets(e) }));
-  for (const [key, value] of Object.entries(MONEY_COLUMNS)) {
-    columnFormat[key] = inrColumnFormatter(allRows.map(value));
-  }
+  // One scale across the money columns: Gold at ₹58,972 next to Stocks at
+  // ₹12.80 L read as two units in one row.
+  const tableFormat = inrColumnFormatter(Object.values(MONEY_COLUMNS).flatMap(value => allRows.map(value)));
+  for (const key of Object.keys(MONEY_COLUMNS)) columnFormat[key] = tableFormat;
   const money = (key, label, opts) => ({
     key, label, type: 'number', align: 'end', value: MONEY_COLUMNS[key], hideWhenEmpty: true,
     render: r => numCell(columnFormat[key](MONEY_COLUMNS[key](r)), opts),

@@ -573,7 +573,7 @@ function renderRow(event) {
   const title = stripTrailingAmount(event.title);
   // Money rows say what the money was for ("Purchase · Travel"), which is the
   // question a row answers; the subtype ("card transaction") says how it was paid.
-  const spendFor = moneyFlow(event) === 'spend' && event.category && event.category !== 'other'
+  const spendFor = amountInr(event) !== null && moneyFlow(event) === 'spend' && event.category && event.category !== 'other'
     ? categoryMeta(event.category).label : null;
   const typeLine = spendFor ?? (event.subtype ? event.subtype.replace(/_/g, ' ') : null);
 
