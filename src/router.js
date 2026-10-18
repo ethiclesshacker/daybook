@@ -55,7 +55,11 @@ export function prefetchRoute(id) {
 /** Read the current hash and return the view ID it maps to. */
 function hashToView() {
   const hash = window.location.hash.replace('#', '').trim();
-  return VIEW_IDS.includes(hash) ? hash : FALLBACK_VIEW;
+  if (VIEW_IDS.includes(hash)) return hash;
+  // An unknown or retired route (#fi) lands on the fallback with the URL to match,
+  // so the nav highlights it and a reload does not repeat the detour.
+  history.replaceState(null, '', '#' + FALLBACK_VIEW);
+  return FALLBACK_VIEW;
 }
 
 /** Navigate to a view — updates hash, active nav item, renders the view. */

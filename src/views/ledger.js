@@ -13,7 +13,7 @@
 // ======================================================
 
 import * as api from '../ledger/api.js';
-import { EVENT_TYPES, STATUSES, SOURCE_TYPES, SUBTYPES, typeMeta, statusMeta, sourceMeta } from '../ledger/taxonomy.js';
+import { EVENT_TYPES, STATUSES, SOURCE_TYPES, SUBTYPES, typeMeta, statusMeta, sourceMeta, categoryMeta } from '../ledger/taxonomy.js';
 // import { parseQuickEntry } from '../ledger/nlparse.js';  // now loaded on demand, see loadParser()
 import { summariseItems } from '../ledger/items.js';
 import { localDateISO, amountInr } from '../ledger/normalize.js';
@@ -243,6 +243,9 @@ async function switchTab(tab) {
     button?.classList.toggle('active', tab === name);
     button?.setAttribute('aria-selected', String(tab === name));
   }
+  // The other tab's list starts at its top, not wherever Load more left this one.
+  const scroller = document.querySelector('#view-container .vp-scroll');
+  if (scroller) scroller.scrollTop = 0; else window.scrollTo(0, 0);
   await loadData();
 }
 
@@ -568,6 +571,11 @@ function renderRow(event) {
   const uncertain = event.status === 'inferred';
 
   const title = stripTrailingAmount(event.title);
+  // Money rows say what the money was for ("Purchase · Travel"), which is the
+  // question a row answers; the subtype ("card transaction") says how it was paid.
+  const spendFor = moneyFlow(event) === 'spend' && event.category && event.category !== 'other'
+    ? categoryMeta(event.category).label : null;
+  const typeLine = spendFor ?? (event.subtype ? event.subtype.replace(/_/g, ' ') : null);
 
   return `
     <article class="tl-item ${needsReview ? 'is-review' : ''} ${uncertain ? 'is-inferred' : ''}"
@@ -585,7 +593,7 @@ function renderRow(event) {
       <div class="tl-body">
         <h3 class="tl-title">${escapeHTML(title)}</h3>
         <div class="tl-meta">
-          <span class="tl-type" style="color:${type.color}">${escapeHTML(type.label)}${event.subtype ? ` · ${escapeHTML(event.subtype.replace(/_/g, ' '))}` : ''}</span>
+          <span class="tl-type" style="color:${type.color}">${escapeHTML(type.label)}${typeLine ? ` · ${escapeHTML(typeLine)}` : ''}</span>
           ${bits.map(b => `<span>${escapeHTML(b)}</span>`).join('')}
           ${needsReview ? `<span class="tl-flag" title="${escapeHTML(status.hint)}">Needs review</span>` : ''}
           ${scheduled ? `<span class="tl-flag is-scheduled" title="${escapeHTML(status.hint)}">Scheduled</span>` : ''}
@@ -772,6 +780,7 @@ const KEY_WORDS = {
 
 /** "llm_note" → "LLM note", "order_id" → "Order ID". */
 export function humaniseKey(key) {
+  if (key === 'raw') return 'As first read';   // inference.raw: what the extractor said before normalising
   const words = String(key).split(/[_\s]+/).filter(Boolean)
     .map(w => KEY_WORDS[w.toLowerCase()] ?? w.toLowerCase());
   if (!words.length) return '';
@@ -833,7 +842,14 @@ function formatValue(key, value, facts = {}) {
   if (Array.isArray(value)) {
     return value.map(v => (typeof v === 'object' && v !== null ? (v.name || JSON.stringify(v)) : String(v))).join(', ');
   }
-  if (typeof value === 'object') return JSON.stringify(value);
+  // Nested records (the extractor's original reading, kept under inference.raw)
+  // read as "subtype: scheduled bill payment · category: bill payment", not JSON.
+  if (typeof value === 'object' && value !== null) {
+    return Object.entries(value)
+      .filter(([, v]) => v !== null && v !== undefined && v !== '')
+      .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${typeof v === 'object' ? JSON.stringify(v) : String(v).replace(/_/g, ' ')}`)
+      .join(' · ');
+  }
   return String(value);
 }
 
