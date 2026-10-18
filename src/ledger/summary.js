@@ -14,13 +14,16 @@
 // ======================================================
 
 import { DEFAULT_TIME_ZONE, formatTime, localDateISO } from './dates.js';
-import { formatMoney, prune } from './normalize.js';
+import { amountInr, formatMoney, normalizeName, prune } from './normalize.js';
+import { canonicalCategory, deriveCategory } from './taxonomy.js';
 
 // Moving money between your own pockets: it left one account and arrived in
 // another, or it paid off a card whose spends were already counted one by one.
-const OWN_POCKETS = new Set(['self_transfer', 'credit_card_bill_repayment', 'card_bill_payment', 'scheduled_bill_payment']);
+// The canonical subtypes (0020_taxonomy.sql) plus the spellings older rows and
+// older callers still use, so a value arriving un-normalised is never miscounted.
+const OWN_POCKETS = new Set(['self_transfer', 'card_bill_payment', 'bank_transfer', 'credit_card_bill_repayment', 'scheduled_bill_payment']);
 // A transfer that is money arriving, even when the bank's email gave no direction.
-const ARRIVALS = new Set(['credit', 'refund', 'interest_credit', 'dividend', 'cashback', 'reward']);
+const ARRIVALS = new Set(['credit', 'salary', 'refund', 'interest', 'interest_credit', 'dividend', 'cashback', 'reward']);
 // A transfer that is money leaving for good.
 const DEPARTURES = new Set(['payment', 'insurance_premium']);
 
@@ -48,6 +51,21 @@ export function moneyFlow(event) {
 }
 
 /**
+ * What an event's spend was for: the stored canonical category (the events
+ * trigger writes one on every money event), else the same derivation the
+ * trigger runs. JS twin of public.ledger_spend_category().
+ */
+export function spendCategory(event) {
+  const stored = canonicalCategory(event?.category ?? event?.data?.category);
+  if (stored) return stored;
+  const d = event?.data || {};
+  return deriveCategory({
+    type: event?.type, subtype: event?.subtype, stated: d.category, description: event?.description,
+    merchant: normalizeName(d.merchant || d.restaurant || d.provider), hasAmount: d.amount !== undefined,
+  }) || 'other';
+}
+
+/**
  * "Does this stay out of spend?" — true for an inflow and for money that only
  * moved between your own pockets. Kept under its old name because that is the
  * question every caller was asking: they all use it to decide what NOT to add
@@ -70,12 +88,13 @@ export function buildDigest(events, { timeZone = DEFAULT_TIME_ZONE, from = null,
   let spendTotal = 0;
   let inflowTotal = 0;
   for (const event of live) {
-    const amount = Number(event.data?.amount);
-    if (!Number.isFinite(amount)) continue;
+    // In rupees, always: a $100 charge is not ₹100, and NeuCoins are not money.
+    const amount = amountInr(event);
+    if (amount === null) continue;
     const flow = moneyFlow(event);
     if (flow === 'inflow') { inflowTotal += amount; continue; }
     if (flow !== 'spend') continue;   // between your own pockets: neither
-    const bucket = event.data?.category || event.subtype || event.type;
+    const bucket = spendCategory(event);
     spend[bucket] = (spend[bucket] || 0) + amount;
     spendTotal += amount;
   }
@@ -107,7 +126,7 @@ export function buildDigest(events, { timeZone = DEFAULT_TIME_ZONE, from = null,
     travel:    (byType.travel || []).map(describe),
     work:      [...(byType.work || []), ...(byType.meeting || [])].map(describe),
     health:    (byType.health || []).map(describe),
-    notable:   live.filter(e => e.type === 'milestone' || Number(e.data?.amount) >= 10_000).map(describe),
+    notable:   live.filter(e => e.type === 'milestone' || amountInr(e) >= 10_000).map(describe),
 
     people: [...people.values()].sort((a, b) => b.count - a.count),
     places: [...places.values()].sort((a, b) => b.count - a.count),
@@ -127,7 +146,7 @@ function pickMajor(events) {
     let value = 0;
     if (['travel', 'milestone', 'meeting', 'work', 'health'].includes(event.type)) value += 3;
     if (event.type === 'food' && event.subtype === 'restaurant') value += 2;
-    if (Number(event.data?.amount) >= 5000) value += 2;
+    if (amountInr(event) >= 5000) value += 2;
     if (event.occurred_at_end) value += 1;                    // it took time
     if ((event.entities || []).some(e => e.type === 'person')) value += 1;
     if (event.status === 'confirmed') value += 1;
@@ -147,6 +166,7 @@ function describe(event) {
     title: event.title,
     amount: Number.isFinite(Number(event.data?.amount)) ? Number(event.data.amount) : null,
     currency: event.data?.currency || null,
+    amount_inr: amountInr(event),
     status: event.status,
     confidence: event.confidence,
     where: event.data?.place || event.data?.restaurant || event.data?.merchant || null,

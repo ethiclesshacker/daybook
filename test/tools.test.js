@@ -119,3 +119,31 @@ test('the new write tools are not marked read-only', () => {
   }
   for (const name of ['get_meal_estimate', 'search_foods']) assert.ok(READ_ONLY_TOOLS.has(name), name);
 });
+
+// ── Write vocabulary ───────────────────────────────────
+import { validateArgs } from '../ledger/tools.js';
+
+test('create_event and update_event take the taxonomy\'s values, in its spelling', () => {
+  const create = TOOL_SPECS.find(t => t.function.name === 'create_event').function.parameters.properties;
+  assert.ok(create.category.enum.includes('dining'));
+  assert.ok(create.subtype.enum.includes('card_transaction'));
+  assert.ok(create.type.enum.includes('purchase'));
+
+  const ok = validateArgs('create_event', { type: 'purchase', subtype: 'card_payment', category: 'Food', data: { category: 'software subscription' } });
+  assert.equal(ok.subtype, 'card_transaction');
+  assert.equal(ok.category, 'dining');
+  assert.equal(ok.data.category, 'subscriptions');
+
+  const upd = validateArgs('update_event', { event_id: 'e', changes: { type: 'transfer', subtype: 'card_payment', data: { category: 'self transfer' } } });
+  assert.equal(upd.changes.subtype, 'card_bill_payment');
+});
+
+test('a value outside the taxonomy is refused with the valid ones listed', () => {
+  assert.throws(() => validateArgs('create_event', { type: 'purchase', category: 'pets' }),
+    /"pets" is not a valid category\. Valid values: dining, food_delivery/);
+  assert.throws(() => validateArgs('create_event', { type: 'groceries' }), /not a valid type/);
+  assert.throws(() => validateArgs('create_event', { type: 'food', subtype: 'flight' }), /subtype for type "food"\. Valid values: food_delivery/);
+  assert.throws(() => validateArgs('update_event', { event_id: 'e', changes: { subtype: 'zzz' } }), /not a valid changes\.subtype/);
+  // Tools without a vocabulary pass straight through.
+  assert.deepEqual(validateArgs('search_events', { query: 'x' }), { query: 'x' });
+});

@@ -11,14 +11,23 @@
 
 const CORPORATE_SUFFIX = /\s+(pvt|private|ltd|limited|inc|llc|india|technologies|services)\s*$/g;
 
-/** Lowercase, strip accents and punctuation, drop trailing corporate noise. */
+/**
+ * Lowercase, strip accents and punctuation, drop trailing corporate noise.
+ *
+ * An apostrophe is dropped rather than turned into a space, and a lone "s"
+ * left over from one is joined back to its word: the receipt says "Kapoor's
+ * Cafe", the card alert says "KAPOOR S CAFE", the menu says "Kapoors Cafe",
+ * and all three are `kapoors cafe` — otherwise they were three entities.
+ */
 export function normalizeName(value) {
   if (value === null || value === undefined) return null;
   let s = String(value)
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')   // combining accents
     .toLowerCase()
+    .replace(/['’‘`]/g, '')
     .replace(/[^a-z0-9]+/g, ' ');
+  s = ` ${s} `.replace(/([a-z]{2,}) s(?= )/g, '$1s');
 
   let previous;
   do { previous = s; s = s.replace(CORPORATE_SUFFIX, ''); } while (s !== previous);
@@ -46,7 +55,7 @@ const ALIASES = [
   { match: ['bigbasket'],     name: 'BigBasket',     type: 'merchant',   category: 'groceries' },
   // The receipts come from dominos.co.in, which titlecases into "Dominos.Co.In".
   { match: ['dominos', 'domino s'], name: "Domino's", type: 'merchant',  category: 'food_delivery' },
-  { match: ['dunzo'],         name: 'Dunzo',         type: 'merchant',   category: 'delivery' },
+  { match: ['dunzo'],         name: 'Dunzo',         type: 'merchant',   category: 'groceries' },
   { match: ['uber'],          name: 'Uber',          type: 'merchant',   category: 'transport' },
   { match: ['ola'],           name: 'Ola',           type: 'merchant',   category: 'transport' },
   { match: ['rapido'],        name: 'Rapido',        type: 'merchant',   category: 'transport' },
@@ -62,24 +71,24 @@ const ALIASES = [
   { match: ['oyo'],           name: 'OYO',           type: 'company',    category: 'travel' },
   { match: ['netflix'],       name: 'Netflix',       type: 'company',    category: 'entertainment' },
   { match: ['spotify'],       name: 'Spotify',       type: 'company',    category: 'entertainment' },
-  { match: ['apple'],         name: 'Apple',         type: 'company',    category: 'technology' },
-  { match: ['google'],        name: 'Google',        type: 'company',    category: 'technology' },
-  { match: ['microsoft'],     name: 'Microsoft',     type: 'company',    category: 'technology' },
-  { match: ['openai'],        name: 'OpenAI',        type: 'company',    category: 'technology' },
+  { match: ['apple'],         name: 'Apple',         type: 'company',    category: 'subscriptions' },
+  { match: ['google'],        name: 'Google',        type: 'company',    category: 'subscriptions' },
+  { match: ['microsoft'],     name: 'Microsoft',     type: 'company',    category: 'subscriptions' },
+  { match: ['openai'],        name: 'OpenAI',        type: 'company',    category: 'subscriptions' },
   // District (tickets and dining) charges the card as Orbgen Technologies.
   { match: ['orbgen'],        name: 'District',      type: 'merchant',   category: 'entertainment' },
   // The bill comes from Jio; the card alert says MYJIO.
   { match: ['jio', 'myjio'],  name: 'Jio',           type: 'company',    category: 'utilities' },
   // "Tata 1Mg Healthca" is the statement's truncation of Tata 1mg Healthcare.
-  { match: ['tata 1mg', '1mg'], name: 'Tata 1mg',    type: 'merchant',   category: 'pharmacy' },
-  { match: ['third wave'],    name: 'Third Wave Coffee', type: 'restaurant', category: 'cafe' },
-  { match: ['starbucks'],     name: 'Starbucks',     type: 'restaurant', category: 'cafe' },
-  { match: ['blue tokai'],    name: 'Blue Tokai',    type: 'restaurant', category: 'cafe' },
-  { match: ['hsbc'],          name: 'HSBC',          type: 'company',    category: 'banking' },
-  { match: ['hdfc'],          name: 'HDFC Bank',     type: 'company',    category: 'banking' },
-  { match: ['icici'],         name: 'ICICI Bank',    type: 'company',    category: 'banking' },
-  { match: ['axis bank'],     name: 'Axis Bank',     type: 'company',    category: 'banking' },
-  { match: ['sbi', 'state bank'], name: 'State Bank of India', type: 'company', category: 'banking' },
+  { match: ['tata 1mg', '1mg'], name: 'Tata 1mg',    type: 'merchant',   category: 'medical' },
+  { match: ['third wave'],    name: 'Third Wave Coffee', type: 'restaurant', category: 'dining' },
+  { match: ['starbucks'],     name: 'Starbucks',     type: 'restaurant', category: 'dining' },
+  { match: ['blue tokai'],    name: 'Blue Tokai',    type: 'restaurant', category: 'dining' },
+  { match: ['hsbc'],          name: 'HSBC',          type: 'company',    category: 'fees' },
+  { match: ['hdfc'],          name: 'HDFC Bank',     type: 'company',    category: 'fees' },
+  { match: ['icici'],         name: 'ICICI Bank',    type: 'company',    category: 'fees' },
+  { match: ['axis bank'],     name: 'Axis Bank',     type: 'company',    category: 'fees' },
+  { match: ['sbi', 'state bank'], name: 'State Bank of India', type: 'company', category: 'fees' },
 ];
 
 /**
@@ -107,7 +116,7 @@ const FOOD_WORDS = new RegExp([
 ].map(w => `\\b${w}\\b`).join('|'), 'i');
 
 // Categories that already say "food" without needing the name read.
-const FOOD_CATEGORIES = new Set(['food_delivery', 'cafe', 'restaurant', 'groceries']);
+const FOOD_CATEGORIES = new Set(['food_delivery', 'dining', 'cafe', 'restaurant', 'groceries']);
 
 /**
  * True when a merchant is somewhere you ate — by what it is known to be, by
@@ -243,6 +252,56 @@ export function formatMoney(amount, currency = 'INR') {
 const CURRENCY_SYMBOLS = { '₹': 'INR', 'rs': 'INR', 'rs.': 'INR', 'inr': 'INR',
                            '$': 'USD', 'usd': 'USD', '€': 'EUR', 'eur': 'EUR',
                            '£': 'GBP', 'gbp': 'GBP' };
+
+// Spellings of a currency that are not its ISO 4217 code. Anything else that
+// is three letters is taken as a code; anything longer is a unit that is not
+// money at all (reward points: NeuCoins, miles) and is never summed as rupees.
+export const CURRENCY_ALIASES = {
+  '₹': 'INR', 'rs': 'INR', 'rs.': 'INR', 'inr': 'INR', 'rupee': 'INR', 'rupees': 'INR', 'inr.': 'INR',
+  '$': 'USD', 'us$': 'USD', 'usd': 'USD', 'dollar': 'USD', 'dollars': 'USD',
+  '€': 'EUR', 'euro': 'EUR', 'euros': 'EUR', '£': 'GBP', 'pound': 'GBP', 'pounds': 'GBP',
+  's$': 'SGD', 'a$': 'AUD', 'aed': 'AED', 'dhs': 'AED', '¥': 'JPY',
+};
+
+/**
+ * A currency as the ledger stores it: ISO 4217 upper-case ("USD"), or — for a
+ * unit that is not money — its name upper-cased without spaces ("NEUCOIN").
+ * The SQL twin is public.ledger_normalize_currency(); the events trigger runs
+ * it on every write. Null in, null out (an amount with no currency is rupees).
+ */
+export function normalizeCurrency(value) {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const key = raw.toLowerCase();
+  if (CURRENCY_ALIASES[key]) return CURRENCY_ALIASES[key];
+  if (/^[a-z]{3}$/i.test(raw)) return raw.toUpperCase();
+  const unit = raw.toUpperCase().replace(/[^A-Z0-9]+/g, '');
+  return unit.replace(/S$/, '') || null;   // "NeuCoins" and "NeuCoin" are one unit
+}
+
+/** True for an ISO 4217 code: money that has a rupee value. "NEUCOIN" is not. */
+export function isCashCurrency(code) {
+  return /^[A-Z]{3}$/.test(code || 'INR');
+}
+
+/**
+ * An event's amount in rupees, or null when it has none or it cannot be
+ * converted. The SQL function public.ledger_amount_inr() is the one place a
+ * conversion happens (it holds the monthly rates in public.fx_rates); every
+ * event read through the API carries its answer as `amount_inr`, and this
+ * only falls back to the amount itself when the event is plainly rupees.
+ */
+export function amountInr(event) {
+  if (event && Object.prototype.hasOwnProperty.call(event, 'amount_inr')) {
+    const v = event.amount_inr;
+    return v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v);
+  }
+  const amount = Number(event?.data?.amount);
+  if (event?.data?.amount === undefined || event?.data?.amount === null || !Number.isFinite(amount)) return null;
+  const currency = normalizeCurrency(event?.data?.currency) || 'INR';
+  return currency === 'INR' ? amount : null;
+}
 
 // Symbol-before ("₹1,299.00", "Rs. 1299") and symbol-after ("1299 INR").
 //
