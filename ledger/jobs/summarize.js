@@ -13,7 +13,7 @@
 // ======================================================
 
 import { config } from '../config.js';
-import { chat } from '../extract/openai.js';
+import { chat, redactSecrets } from '../extract/openai.js';
 import { searchEvents, getDailySummary, upsertDailySummary, upsertPeriodSummary,
          setting, resolveUserId, lifeDays } from '../db.js';
 import { buildDigest, renderDigestText, lifeSection } from '../../src/ledger/summary.js';
@@ -79,12 +79,15 @@ async function summarizePeriod(userId, timeZone, period, start, end, label) {
   }
   const deterministic = renderDigestText(digest, { label, timeZone });
 
-  const { text, generatedBy } = await writeProse(deterministic, digest, label, PROSE_WORDS[period] ?? PROSE_WORDS.week);
+  const { text, generatedBy, proseError } = await writeProse(deterministic, digest, label, PROSE_WORDS[period] ?? PROSE_WORDS.week);
 
   const metadata = {
     generated_from: 'events',
     period, label, timezone: timeZone,
     deterministic_summary: deterministic,
+    // Set when the model was asked and failed, so the catch-up run knows this
+    // day still owes a prose summary. The error is kept short and redacted.
+    ...(proseError ? { prose_failed: true, prose_error: proseError } : {}),
   };
 
   if (period === 'day') {
@@ -120,10 +123,13 @@ async function writeProse(deterministic, digest, label, maxWords = 120) {
 
   if (!ok || !content?.trim()) {
     // A summary that reads a little flat is strictly better than a run that
-    // produced none, so the deterministic rendering is what gets stored.
+    // produced none, so the deterministic rendering is what gets stored. The
+    // error goes to metadata, never into the text: a 401 quotes the API key
+    // back, and the summary is what the dashboard and Hermes show.
     return {
-      text: `${deterministic}\n\n(Prose generation failed: ${error || 'empty completion'})`,
+      text: deterministic,
       generatedBy: 'deterministic',
+      proseError: redactSecrets(error || 'empty completion').slice(0, 200),
     };
   }
 
@@ -149,13 +155,28 @@ async function catchUpDays(userId, timeZone, days) {
     if (!existing?.live_event_count) { skipped.push({ date, reason: 'no events' }); continue; }
     // A summary written before the body section existed is rewritten once.
     const lacksBody = existing.summary && !existing.sections?.body;
-    if (existing.summary && !existing.stale && !lacksBody) { skipped.push({ date, reason: 'already current' }); continue; }
+    // So is one whose prose failed: it is the fallback, not the summary.
+    const proseFailed = existing.summary && proseFailedSummary(existing);
+    if (existing.summary && !existing.stale && !lacksBody && !proseFailed) {
+      skipped.push({ date, reason: 'already current' }); continue;
+    }
 
     done.push(await summarizeOneDay(userId, timeZone, date,
-      !existing.summary ? 'missing' : existing.stale ? 'stale' : 'no body section'));
+      !existing.summary ? 'missing' : existing.stale ? 'stale'
+      : proseFailed ? 'prose generation failed' : 'no body section'));
   }
 
   return { period: 'day', mode: 'catch-up', window_days: days, generated: done, skipped };
+}
+
+/**
+ * Whether a stored summary is the fallback for a failed prose call: flagged in
+ * metadata (current code), or carrying the marker text older runs appended.
+ */
+export function proseFailedSummary(row) {
+  if (!row) return false;
+  if (row.metadata?.prose_failed) return true;
+  return /\(Prose generation failed\b/.test(row.summary || '');
 }
 
 async function summarizeOneDay(userId, timeZone, date, reason) {

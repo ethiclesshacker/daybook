@@ -12,6 +12,17 @@ import { config } from '../config.js';
 import { recordUsage } from '../costs.js';
 
 /**
+ * API keys never belong in a stored error, masked or not. A 401 body quotes
+ * the key back ("Incorrect API key provided: sk-proj-****…abcd"), and that
+ * text used to reach run rows and daily summaries.
+ */
+export function redactSecrets(text) {
+  return String(text ?? '')
+    .replace(/\b(sk|rk|pk)-[A-Za-z0-9_\-*]{6,}/g, '$1-[redacted]')
+    .replace(/(api[_ -]?key provided:?\s*)[^\s"',]+/gi, '$1[redacted]');
+}
+
+/**
  * One chat completion.
  *
  * Returns { ok, content, usage, error }. Never throws — the deterministic
@@ -48,7 +59,7 @@ export async function chat({
     });
 
     if (!response.ok) {
-      const detail = (await response.text()).slice(0, 400);
+      const detail = redactSecrets((await response.text()).slice(0, 400));
       const error = /model/i.test(detail) && /not|unknown|does not exist/i.test(detail)
         ? `The model id "${model}" was rejected. Set OPENAI_MODEL in .env.ledger. ${detail}`
         : `OpenAI ${response.status}: ${detail}`;
