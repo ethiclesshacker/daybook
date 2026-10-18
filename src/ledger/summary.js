@@ -164,12 +164,18 @@ function describe(event) {
     type: event.type,
     subtype: event.subtype,
     title: event.title,
-    amount: Number.isFinite(Number(event.data?.amount)) ? Number(event.data.amount) : null,
+    // Whole rupees: the prose quoted "₹150.14" where every screen says ₹150.
+    amount: Number.isFinite(Number(event.data?.amount)) ? Math.round(Number(event.data.amount)) : null,
     currency: event.data?.currency || null,
-    amount_inr: amountInr(event),
+    amount_inr: amountInr(event) === null ? null : Math.round(amountInr(event)),
     status: event.status,
     confidence: event.confidence,
+    // Only money has a spend category; a weigh-in is not "medical" spend.
+    category: amountInr(event) === null ? null : spendCategory(event),
     where: event.data?.place || event.data?.restaurant || event.data?.merchant || null,
+    // A delivery app is how it arrived, not where it came from: IGP Cakes, via Zomato.
+    via: event.data?.restaurant && event.data?.merchant && event.data.merchant !== event.data.restaurant
+      ? event.data.merchant : null,
   };
 }
 
