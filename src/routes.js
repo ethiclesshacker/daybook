@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // The screens, in navigation order — the one list the router validates
 // hashes against and the sidebar is drawn from. This used to be three
@@ -22,7 +23,8 @@ export const NAV_ITEMS = [
 
   { id: 'points',    icon: 'fa-credit-card',  label: 'Points & Rewards', group: 'Money' },
   { id: 'networth',  icon: 'fa-chart-line',   label: 'Net Worth' },
-  { id: 'fi',        icon: 'fa-bullseye',     label: 'FI Planner' },
+  // Hidden 2026-10-18: it projected from budgeted surplus (~5× optimistic); the code stays in views/fi.js.
+  // { id: 'fi',        icon: 'fa-bullseye',     label: 'FI Planner' },
 
   { id: 'settings',  icon: 'fa-sliders',      label: 'Settings',         group: '' },
 ];

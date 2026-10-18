@@ -1,9 +1,9 @@
 import { createTable } from '../table.js';
 import { getCurrentUserId } from '../supabase.js';
-import { listEntries, saveEntry, deleteEntry } from '../networth/api.js';
+import { listEntries, saveEntry, deleteEntry, refresh as refreshEntries } from '../networth/api.js';
 import * as settings from '../settings.js';
 import {
-  formatINR, formatINRFull, formatPercent, formatDate, todayISO,
+  formatINR, formatINRFull, formatPercent, formatDate, formatShortDate, todayISO, inrColumnFormatter,
   destroyChart, downloadCSV, escapeHTML,
   openModal, closeModal, showToast, parseNum, withBusy,
   computeNet, computeAssets, computeLiquid, computeEmergencyFund, renderKpiCards,
@@ -30,7 +30,7 @@ export async function renderNetWorth(container) {
     <div class="page-header">
       <div class="page-header-left">
         <h2>Net Worth</h2>
-        <p>Track your assets, liabilities, and financial independence progress</p>
+        <p>Track your assets, liabilities and runway</p>
       </div>
       <div class="page-actions">
         <button type="button" class="btn-sm btn-ghost" id="nw-export-btn">
@@ -114,7 +114,7 @@ export async function renderNetWorth(container) {
 
   document.getElementById('nw-fab').addEventListener('click', () => openEntryForm());
   document.getElementById('nw-export-btn').addEventListener('click', exportCSV);
-  document.getElementById('nw-refresh-btn').addEventListener('click', loadData);
+  document.getElementById('nw-refresh-btn').addEventListener('click', () => { refreshEntries(); loadData(); });
 
   document.getElementById('nw-year-filter')?.addEventListener('change', e => {
     filterYear = e.target.value;
@@ -139,7 +139,7 @@ async function loadData() {
   const token = ++loadToken;
   let data;
   try {
-    data = await listEntries();
+    [data] = await Promise.all([listEntries(), settings.ready()]);
   } catch (err) {
     if (token === loadToken) showToast('Failed to load data: ' + err.message, 'error');
     return;
@@ -169,8 +169,10 @@ function renderKPIs() {
   const prv = { net: computeNet(prev) };
 
   const nwChange = prv.net !== 0 ? ((cur.net - prv.net) / Math.abs(prv.net)) * 100 : 0;
+  // Once, with the date it is measured from. It used to be a "+1.2%" badge
+  // and "↑ 1.2% from last" under it: the same number twice, from nobody knew when.
   const nwChangeLabel = prev
-    ? `${nwChange >= 0 ? '↑' : '↓'} ${Math.abs(nwChange).toFixed(1)}% from last`
+    ? `${nwChange >= 0 ? '↑' : '↓'} ${Math.abs(nwChange).toFixed(1)}% from last snapshot (${formatShortDate(prev.date)})`
     : 'First snapshot';
 
   const monthlyExpenses = settings.get('monthly_expenses');
@@ -194,7 +196,6 @@ function renderKPIs() {
   const kpis = [
     {
       id: 'kpi-nw', label: 'Net worth', icon: 'fa-chart-column', tone: 'accent', value: formatINRFull(cur.net), raw: cur.net,
-      badge: { text: nwChange >= 0 ? `+${nwChange.toFixed(1)}%` : `${nwChange.toFixed(1)}%`, type: nwChange >= 0 ? 'positive' : 'negative' },
       sub: nwChangeLabel,
       tooltip: 'Total assets minus total liabilities at latest snapshot date.',
     },
@@ -220,7 +221,7 @@ function renderKPIs() {
       id: 'kpi-runway', label: 'Emergency runway', icon: 'fa-shield-halved', tone: runway >= runwayTarget ? 'success' : 'warning',
       value: runway.toFixed(1), unit: 'months', raw: runway.toFixed(1),
       badge: { text: runway >= runwayTarget ? 'Healthy' : 'Build up', type: runway >= runwayTarget ? 'positive' : 'neutral' },
-      sub: `${settings.get('emergency_fund_basis') === 'cash_like' ? 'Cash + FDs' : 'Liquid'} ÷ ₹${(monthlyExpenses/1000).toFixed(0)}k/mo baseline`,
+      sub: `${settings.get('emergency_fund_basis') === 'cash_like' ? 'Cash + FDs' : 'Liquid'} ÷ ${formatINRFull(monthlyExpenses)}/mo baseline`,
       tooltip: `Emergency fund ÷ monthly baseline expenses. Target: ≥ ${runwayTarget} months.`,
     },
     {
@@ -256,6 +257,16 @@ function renderYearFilter() {
 }
 
 // ── Table ───────────────────────────────────────────────
+const MONEY_COLUMNS = {
+  stocks:       r => parseNum(r.e.stocks),
+  mutual_funds: r => parseNum(r.e.mutual_funds),
+  cash:         r => parseNum(r.e.cash),
+  assets:       r => r.assets,
+  credit_cards: r => parseNum(r.e.credit_cards),
+  net:          r => r.net,
+};
+const columnFormat = {};
+
 function renderTable() {
   const container = document.getElementById('nw-table-container');
   if (!container) return;
@@ -272,9 +283,17 @@ function renderTable() {
     return { e, net, assets: computeAssets(e), chgPct: prevNet ? ((net - prevNet) / Math.abs(prevNet)) * 100 : null };
   });
 
-  const money = (key, label, value, opts) => ({
-    key, label, type: 'number', align: 'end', value,
-    render: r => numCell(formatINR(value(r)), opts),
+  // One scale per column, chosen from every snapshot (not just this page or
+  // year), so a column never reads "₹80.0k" above "₹1.20 L" and does not
+  // change unit as you page or filter. Recomputed on every draw; the column
+  // definitions, built once, read it from `columnFormat`.
+  const allRows = entries.map(e => ({ e, net: computeNet(e), assets: computeAssets(e) }));
+  for (const [key, value] of Object.entries(MONEY_COLUMNS)) {
+    columnFormat[key] = inrColumnFormatter(allRows.map(value));
+  }
+  const money = (key, label, opts) => ({
+    key, label, type: 'number', align: 'end', value: MONEY_COLUMNS[key], hideWhenEmpty: true,
+    render: r => numCell(columnFormat[key](MONEY_COLUMNS[key](r)), opts),
   });
   table ??= createTable(container, {
     id: 'net-worth',
@@ -285,12 +304,12 @@ function renderTable() {
     // say "Mutual Funds".
     columns: [
       { key: 'date', label: 'Date', type: 'date', value: r => r.e.date, render: r => escapeHTML(formatDate(r.e.date)) },
-      money('stocks', 'Stocks', r => parseNum(r.e.stocks)),
-      money('mutual_funds', 'Mutual Funds', r => parseNum(r.e.mutual_funds)),
-      money('cash', 'Cash', r => parseNum(r.e.cash)),
-      money('assets', 'Total Assets', r => r.assets),
-      money('credit_cards', 'Liabilities', r => parseNum(r.e.credit_cards), { tone: 'danger' }),
-      money('net', 'Net Worth', r => r.net, { tone: 'accent', bold: true }),
+      money('stocks', 'Stocks'),
+      money('mutual_funds', 'Mutual Funds'),
+      money('cash', 'Cash'),
+      money('assets', 'Total Assets'),
+      money('credit_cards', 'Liabilities', { tone: 'danger' }),
+      money('net', 'Net Worth', { tone: 'accent', bold: true }),
       { key: 'change', label: 'Change', type: 'number', align: 'end', value: r => r.chgPct,
         render: r => (r.chgPct === null
           ? numCell('—')

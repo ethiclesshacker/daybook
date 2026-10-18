@@ -32,6 +32,25 @@ import { lookupBarcode } from './nutrition/databases.js';
 import { curatedLookup } from './nutrition/curated.js';
 import { matchINDB } from './nutrition/indb.js';
 import { resolveSettings } from '../src/settings-schema.js';
+import { CATEGORIES, EVENT_TYPES, SUBTYPES, canonicalCategory, canonicalSubtype } from '../src/ledger/taxonomy.js';
+
+// The vocabulary a write may use. Enums in the schemas so the model sees them,
+// and checked again in runTool() because a schema is advice to a model, not a
+// guarantee from it.
+const TYPE_IDS = EVENT_TYPES.map(t => t.id);
+const CATEGORY_IDS = CATEGORIES.map(c => c.id);
+const ALL_SUBTYPES = [...new Set(Object.values(SUBTYPES).flat())];
+const SUBTYPE_HELP = Object.entries(SUBTYPES).map(([type, list]) => `${type}: ${list.join(', ')}`).join('; ');
+const CATEGORY_HELP = CATEGORY_IDS.join(', ');
+const TYPE_SCHEMA = { type: 'string', enum: TYPE_IDS, description: 'The kind of event.' };
+const SUBTYPE_SCHEMA = {
+  type: 'string', enum: ALL_SUBTYPES,
+  description: `Must belong to the type. ${SUBTYPE_HELP}. card_transaction/upi_payment = how it was paid; the category says what for.`,
+};
+const CATEGORY_SCHEMA = {
+  type: 'string', enum: CATEGORY_IDS,
+  description: `What the money was for (budget lines: food = dining/food_delivery/groceries; sinking = travel/insurance/vehicle/medical/gifts/tax/fees; lifestyle = shopping/clothing/electronics/entertainment/subscriptions/utilities/transport/personal_care/education/home; rent; fuel; investments; outside the budget: work, stored_value, other). Values: ${CATEGORY_HELP}.`,
+};
 
 /**
  * Turn a date expression into an instant range.
@@ -197,11 +216,16 @@ export const TOOLS = {
       properties: {
         natural_language: { type: 'string' },
         occurred_at: { type: 'string', description: 'ISO 8601.' },
-        type: { type: 'string' },
-        subtype: { type: 'string' },
+        type: TYPE_SCHEMA,
+        subtype: SUBTYPE_SCHEMA,
+        category: CATEGORY_SCHEMA,
         title: { type: 'string' },
         description: { type: 'string' },
-        data: { type: 'object', description: 'Facts: merchant, amount, currency, place, order_id…' },
+        data: {
+          type: 'object',
+          description: 'Facts: merchant, amount, currency (ISO 4217, e.g. INR, USD), place, order_id… A category here must be one of the category values.',
+          properties: { category: CATEGORY_SCHEMA, currency: { type: 'string', description: 'ISO 4217 code: INR, USD, EUR…' } },
+        },
         entities: { type: 'array', items: { type: 'object' } },
         allow_merge: { type: 'boolean', default: true, description: 'False forces a separate event even if a similar one exists.' },
       },
@@ -228,7 +252,7 @@ export const TOOLS = {
           subtype: event.subtype ?? null,
           title: event.title,
           description: event.description ?? null,
-          data: event.data || {},
+          data: prune({ ...(event.data || {}), category: args.category ?? event.data?.category }),
           inference: event.inference || {},
           status: event.status === 'scheduled' ? 'scheduled' : 'confirmed',
         },
@@ -246,7 +270,17 @@ export const TOOLS = {
       type: 'object', required: ['event_id', 'changes'],
       properties: {
         event_id: { type: 'string' },
-        changes: { type: 'object', description: 'Any of occurred_at, type, subtype, title, description, data, inference, status, confidence.' },
+        changes: {
+          type: 'object',
+          description: 'Any of occurred_at, type, subtype, title, description, data, inference, status, confidence. '
+            + 'type, subtype and data.category must use the listed values; a subtype must belong to the (new or current) type.',
+          properties: {
+            type: TYPE_SCHEMA,
+            subtype: SUBTYPE_SCHEMA,
+            status: { type: 'string', enum: ['confirmed', 'inferred', 'scheduled', 'needs_review', 'dismissed'] },
+            data: { type: 'object', properties: { category: CATEGORY_SCHEMA } },
+          },
+        },
         replace_data: { type: 'boolean', default: false, description: 'True replaces data wholesale instead of merging.' },
       },
     },
@@ -1340,7 +1374,77 @@ export const READ_ONLY_TOOLS = new Set(Object.entries(TOOLS).filter(([, spec]) =
 export async function runTool(name, args = {}) {
   const tool = TOOLS[name];
   if (!tool) throw new Error(`Unknown tool "${name}". Available: ${Object.keys(TOOLS).join(', ')}`);
-  return tool.handler(args);
+  return tool.handler(validateArgs(name, args));
+}
+
+/**
+ * Check a write's vocabulary before it reaches the database, and say what
+ * would have been accepted. A near-miss the taxonomy knows ("Food",
+ * "card_payment") is accepted in its canonical spelling; anything else is
+ * refused with the valid values, so the model can retry rather than coin a
+ * category nobody will ever total.
+ */
+/**
+ * @param {string} name
+ * @param {Record<string, any>} [args]
+ * @returns {Record<string, any>}
+ */
+export function validateArgs(name, args = {}) {
+  const out = { ...args };
+  const fail = (field, value, valid) => {
+    throw new Error(`${name}: "${value}" is not a valid ${field}. Valid values: ${valid.join(', ')}.`);
+  };
+  const checkType = (value, field) => {
+    if (value === undefined || value === null || value === '') return value;
+    if (!TYPE_IDS.includes(value)) fail(field, value, TYPE_IDS);
+    return value;
+  };
+  const checkSubtype = (type, value, field) => {
+    if (value === undefined || value === null || value === '') return value;
+    if (!type) {
+      // No type to check against: accept anything that is, or is a known
+      // spelling of, a subtype of some type, and let the database canonicalise
+      // it for the event's actual type.
+      const known = Object.keys(SUBTYPES).some(t => SUBTYPES[t].includes(canonicalSubtype(t, value)));
+      if (!known) fail(field, value, ALL_SUBTYPES);
+      return value;
+    }
+    const canonical = canonicalSubtype(type, value);
+    const valid = SUBTYPES[type] || [];
+    if (valid.length && !valid.includes(canonical)) fail(`${field} for type "${type}"`, value, valid);
+    return canonical;
+  };
+  const checkCategory = (value, field) => {
+    if (value === undefined || value === null || value === '') return value;
+    const canonical = canonicalCategory(value);
+    if (!canonical) fail(field, value, CATEGORY_IDS);
+    return canonical;
+  };
+
+  if (name === 'create_event') {
+    out.type = checkType(out.type, 'type');
+    out.subtype = checkSubtype(out.type, out.subtype, 'subtype');
+    out.category = checkCategory(out.category, 'category');
+    if (out.data && typeof out.data === 'object') {
+      out.data = { ...out.data };
+      if ('category' in out.data) out.data.category = checkCategory(out.data.category, 'data.category');
+    }
+    for (const k of Object.keys(out)) if (out[k] === undefined) delete out[k];
+  }
+
+  if (name === 'update_event' && out.changes && typeof out.changes === 'object') {
+    const changes = { ...out.changes };
+    changes.type = checkType(changes.type, 'changes.type');
+    // Without a new type the subtype is checked against the full list; the
+    // database still canonicalises it for the event's actual type.
+    if ('subtype' in changes) changes.subtype = checkSubtype(changes.type || null, changes.subtype, 'changes.subtype');
+    if (changes.data && typeof changes.data === 'object' && 'category' in changes.data) {
+      changes.data = { ...changes.data, category: checkCategory(changes.data.category, 'changes.data.category') };
+    }
+    for (const k of Object.keys(changes)) if (changes[k] === undefined) delete changes[k];
+    out.changes = changes;
+  }
+  return out;
 }
 
 const sameName = (a, b) =>

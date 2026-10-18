@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Browser client for the ledger.
 //
@@ -11,8 +12,22 @@
 
 import { supabase } from '../supabase.js';
 import { rpc, unwrap } from '../rpc.js';
+import { cached, invalidate, invalidating } from '../cache.js';
 
-export function searchEvents({
+// Reads are cached for the session (src/cache.js) and every write clears the
+// whole cache: an edit to an event can move a card row, a day's money and a
+// meal's calories, so nothing narrower is safe.
+const read = (key, fn) => cached(`ledger:${key}`, fn);
+const write = fn => invalidating(null, fn);
+
+/** Drop everything cached — the refresh buttons call this. */
+export const refresh = () => invalidate();
+
+export function searchEvents(args = {}) {
+  return read(`search:${JSON.stringify(args)}`, () => searchEventsUncached(args));
+}
+
+function searchEventsUncached({
   query = null, types = null, subtypes = null, statuses = null, sourceTypes = null,
   entityId = null, entityName = null, from = null, to = null,
   minConfidence = null, limit = 100, offset = 0, ascending = false,
@@ -31,25 +46,23 @@ export function searchEvents({
 }
 
 export const getEvent            = id            => rpc('ledger_get_event', { p_event_id: id });
-export const dismissEvent        = (id, reason)  => rpc('ledger_dismiss_event', { p_event_id: id, p_reason: reason ?? null });
-export const deleteEvent         = (id, purge)   => rpc('ledger_delete_event', { p_event_id: id, p_purge_sources: Boolean(purge) });
-export const mergeEvents         = (target, dup) => rpc('ledger_merge_events', { p_target: target, p_duplicate: dup });
+export const dismissEvent        = write((id, reason)  => rpc('ledger_dismiss_event', { p_event_id: id, p_reason: reason ?? null }));
+export const deleteEvent         = write((id, purge)   => rpc('ledger_delete_event', { p_event_id: id, p_purge_sources: Boolean(purge) }));
+export const mergeEvents         = write((target, dup) => rpc('ledger_merge_events', { p_target: target, p_duplicate: dup }));
 export const duplicateCandidates = (id, limit=5) => rpc('ledger_duplicate_candidates', { p_event_id: id, p_limit: limit });
-export const reviewQueue         = (limit = 50)  => rpc('ledger_review_queue', { p_limit: limit });
+export const reviewQueue         = (limit = 50)  => read(`review:${limit}`, () => rpc('ledger_review_queue', { p_limit: limit }));
 export const getDailySummary     = date          => rpc('ledger_get_daily_summary', { p_date: date });
-export const stats               = (from, to)    => rpc('ledger_stats', { p_from: from, p_to: to });
+export const stats               = (from, to)    => read(`stats:${from}:${to}`, () => rpc('ledger_stats', { p_from: from, p_to: to }));
 export const exportLedger        = (from, to)    => rpc('ledger_export', { p_from: from, p_to: to });
 
-export function createEvent(event, entities = [], { allowMerge = true, sourceType = 'manual' } = {}) {
-  return rpc('ledger_create_event', {
+export const createEvent = write((event, entities = [], { allowMerge = true, sourceType = 'manual' } = {}) =>
+  rpc('ledger_create_event', {
     p_event: event, p_entities: entities,
     p_source_type: sourceType, p_allow_merge: allowMerge,
-  });
-}
+  }));
 
-export function updateEvent(id, changes, { replaceData = false } = {}) {
-  return rpc('ledger_update_event', { p_event_id: id, p_changes: changes, p_replace_data: replaceData });
-}
+export const updateEvent = write((id, changes, { replaceData = false } = {}) =>
+  rpc('ledger_update_event', { p_event_id: id, p_changes: changes, p_replace_data: replaceData }));
 
 /**
  * Generated summaries across a date range.
@@ -57,7 +70,11 @@ export function updateEvent(id, changes, { replaceData = false } = {}) {
  * A per-day RPC would mean one round trip per row of the timeline; the table
  * is RLS-scoped, so a range read is both cheaper and simpler.
  */
-export async function dailySummaries(fromDate, toDate) {
+export function dailySummaries(fromDate, toDate) {
+  return read(`summaries:${fromDate}:${toDate}`, () => dailySummariesUncached(fromDate, toDate));
+}
+
+async function dailySummariesUncached(fromDate, toDate) {
   let query = supabase
     .from('daily_summaries')
     .select('date, summary, event_count, generated_by, generated_at')
@@ -78,7 +95,11 @@ export async function dailySummaries(fromDate, toDate) {
 // bypass — the RLS policy is the whole of the access rule.
 
 /** Every resolved dish, for the client-side rollup in src/ledger/nutrition.js. */
-export async function foodDictionary() {
+export function foodDictionary() {
+  return read('food-dict', foodDictionaryUncached);
+}
+
+async function foodDictionaryUncached() {
   const data = await unwrap(supabase
     .from('food_items')
     .select('normalized_name, display_name, kcal, protein_g, carbs_g, fat_g, portion_g, category, source, confidence, verified')
@@ -87,7 +108,7 @@ export async function foodDictionary() {
 }
 
 /** Correct one dish by hand. Writes source 'manual', which outranks the resolver. */
-const setFoodItem = payload => rpc('food_upsert_item', { p_user_id: null, p_payload: payload });
+const setFoodItem = write(payload => rpc('food_upsert_item', { p_user_id: null, p_payload: payload }));
 
 // The Dishes page edits the dictionary directly. The upsert function is the
 // resolver's door — it is rank-guarded and refuses to touch a verified row —
@@ -97,42 +118,42 @@ const setFoodItem = payload => rpc('food_upsert_item', { p_user_id: null, p_payl
 const DICT_COLUMNS = 'id, normalized_name, display_name, kcal, protein_g, carbs_g, fat_g, portion_g, category, source, confidence, verified, source_ref, updated_at';
 
 /** Every dish, priced or not, for the Dishes page. */
-export async function foodDictionaryAll() {
-  const data = await unwrap(supabase.from('food_items').select(DICT_COLUMNS).order('display_name'));
-  return data || [];
+export function foodDictionaryAll() {
+  return read('food-dict-all', async () =>
+    (await unwrap(supabase.from('food_items').select(DICT_COLUMNS).order('display_name'))) || []);
 }
 
 /**
  * A person's numbers for one dish. Marked manual + verified, so no resolver
  * run will ever revisit it, and it re-values every meal that ever had it.
  */
-export async function updateFoodItem(id, fields) {
+export const updateFoodItem = write(async (id, fields) => {
   const patch = {
     ...fields, source: 'manual', confidence: 1, verified: true,
     source_ref: { entered_by: 'human', via: 'dishes page', at: new Date().toISOString() },
   };
   return unwrap(supabase.from('food_items').update(patch).eq('id', id).select(DICT_COLUMNS).single());
-}
+});
 
 /** Forget the numbers and let the resolver estimate the dish again. */
-export async function resetFoodItem(id) {
+export const resetFoodItem = write(async (id) => {
   const patch = {
     kcal: null, protein_g: null, carbs_g: null, fat_g: null, portion_g: null,
     source: 'llm', confidence: null, verified: false,
     source_ref: { reset_by: 'human', via: 'dishes page', at: new Date().toISOString() },
   };
   return unwrap(supabase.from('food_items').update(patch).eq('id', id).select(DICT_COLUMNS).single());
-}
+});
 
 /**
  * Fold one dish into another. Every past meal that named the duplicate is
  * rewritten to name the target, so counts and calories agree retroactively.
  */
-export const mergeFoodItems = (targetId, duplicateId) =>
-  rpc('food_merge_items', { p_user_id: null, p_target_id: targetId, p_duplicate_id: duplicateId });
+export const mergeFoodItems = write((targetId, duplicateId) =>
+  rpc('food_merge_items', { p_user_id: null, p_target_id: targetId, p_duplicate_id: duplicateId }));
 
 /** A dish typed in by hand. Created through the upsert (it owns normalisation), then verified. */
-export async function createFoodItem(fields) {
+export const createFoodItem = write(async (fields) => {
   const res = await setFoodItem({
     ...fields, source: 'manual', confidence: 1,
     source_ref: { entered_by: 'human', via: 'dishes page', at: new Date().toISOString() },
@@ -142,10 +163,14 @@ export async function createFoodItem(fields) {
     throw new Error('That dish already exists — edit it in the list instead.');
   }
   return unwrap(supabase.from('food_items').update({ verified: true }).eq('id', res.id).select(DICT_COLUMNS).single());
-}
+});
 
 /** The last few ingestion runs — the "is this thing on?" indicator. */
-export async function recentRuns(limit = 5) {
+export function recentRuns(limit = 5) {
+  return read(`runs:${limit}`, () => recentRunsUncached(limit));
+}
+
+async function recentRunsUncached(limit) {
   const data = await unwrap(supabase
     .from('ingestion_runs')
     .select('source_type, account_key, started_at, completed_at, status, items_seen, events_created, events_updated, errors')

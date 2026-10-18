@@ -1,3 +1,4 @@
+// @ts-check
 // Run with: npm test
 // Covers the nutrition rollup and the resolver's routing and gates — no DOM,
 // no network. These are the places where a wrong answer is both plausible and

@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // The settings catalogue, on its own and free of imports.
 //
@@ -71,7 +72,8 @@ export const SETTINGS_SCHEMA = {
   },
   wealth_score_divisor: {
     type: 'number', default: 10, min: 1, max: 50, step: 1, group: 'Financial independence',
-    label: 'Wealth score divisor', hint: 'From "The Millionaire Next Door": age × income ÷ this.',
+    label: 'Expected-wealth divisor',
+    hint: 'The wealth score on Net Worth compares your net worth with an "expected" figure for your age: age × annual income ÷ this number. "The Millionaire Next Door" uses 10; a score of 1.0 or more is ahead for your age.',
   },
 
   emergency_runway_target: {

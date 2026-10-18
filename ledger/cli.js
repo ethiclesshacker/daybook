@@ -4,6 +4,7 @@
 //
 //   node ledger/cli.js probe      [--days 7] [--limit 50] [--account KEY] [-v] [--json]
 //   node ledger/cli.js ingest     [--account KEY] [--dry-run] [--backfill-days 30] [--limit N]
+//                                 (exits 1 if a run failed, 2 if one was partial)
 //   node ledger/cli.js summarize  [--period day|week|month] [--date YYYY-MM-DD]
 //   node ledger/cli.js tool NAME  '{"json":"args"}'
 //   node ledger/cli.js tools-manifest   (the tools as a JSON-Schema function list)
@@ -55,6 +56,11 @@ const COMMANDS = {
     const { ingestEmail } = await import('./jobs/ingest-email.js');
     const result = await ingestEmail(args);
     console.log(JSON.stringify(result, null, 2));
+    // Non-zero so `launchctl list` shows a failing job: 1 when an account's
+    // run failed outright, 2 when it finished but left mail unprocessed or
+    // hit errors (the run row says which).
+    if (result.status === 'failed') process.exitCode = 1;
+    else if (result.status === 'partial') process.exitCode = 2;
   },
 
   async summarize() {

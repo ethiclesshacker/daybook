@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Nutrition rollup — line items plus the dish dictionary, summed per meal.
 //

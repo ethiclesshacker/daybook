@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Supabase access for the jobs.
 //
@@ -75,7 +76,26 @@ export async function rpc(fn, args) {
 
 /** The one write path. Returns { action, event_id, source_id, matched_by }. */
 export function ingestEvent(userId, payload) {
-  return rpc('ledger_ingest_event', { p_user_id: userId, p_payload: payload });
+  return rpc('ledger_ingest_event', { p_user_id: userId, p_payload: jsonSafe(payload) });
+}
+
+/**
+ * Strings Postgres's jsonb or PostgREST's parser refuse: NUL ("unsupported
+ * Unicode escape sequence") and unpaired UTF-16 surrogates, which a subject
+ * truncated mid-emoji produces. Either one fails the whole write with "Empty
+ * or invalid json", and the mail it came from was lost on 2026-10-13.
+ */
+export function jsonSafe(value) {
+  if (typeof value === 'string') {
+    return value
+      .replace(/\u0000/g, '')
+      .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '�');
+  }
+  if (Array.isArray(value)) return value.map(jsonSafe);
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, jsonSafe(v)]));
+  }
+  return value;
 }
 
 // ledger_search_events takes fourteen arguments and PostgREST wants every one

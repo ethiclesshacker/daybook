@@ -1020,12 +1020,15 @@ const SENDER_RULES = [
 
       // Same as the card alert: a UPI payment to a restaurant is a meal seen
       // from the payment's side, and belongs where meals are.
-      const food = !refund && isFoodMerchant(payee, ctx.foodMerchants);
+      const cardBill = !refund && isCardBillPayment(body, [payeeName, m.from?.address]);
+      const food = !refund && !cardBill && isFoodMerchant(payee, ctx.foodMerchants);
 
       return withKeys({
-        type: refund ? 'transfer' : food ? 'food' : 'purchase',
-        subtype: refund ? 'refund' : 'upi_payment',
-        title: `${payee?.name || (refund ? 'Refund' : 'Payment')}${refund ? ' refund' : ''} — ${formatMoney(amount, 'INR')}`,
+        type: (refund || cardBill) ? 'transfer' : food ? 'food' : 'purchase',
+        subtype: refund ? 'refund' : cardBill ? 'card_bill_payment' : 'upi_payment',
+        title: cardBill
+          ? `Card bill payment — ${formatMoney(amount, 'INR')}`
+          : `${payee?.name || (refund ? 'Refund' : 'Payment')}${refund ? ' refund' : ''} — ${formatMoney(amount, 'INR')}`,
         occurred_at: new Date(m.date).toISOString(),
         data: prune({
           merchant: payee?.name || null,
@@ -1149,17 +1152,22 @@ const SENDER_RULES = [
       // The subtype stays `card_transaction`: it is still how this was seen,
       // and the merge rules use exactly that value to let a restaurant's own
       // receipt take over the description when one arrives later.
-      const food = !credit && !selfTransfer && isFoodMerchant(merchant, ctx.foodMerchants);
+      const cardBill = !credit && !selfTransfer && isCardBillPayment(`${m.subject || ''}\n${text}`, [payee, vpaHandle]);
+      const food = !credit && !selfTransfer && !cardBill && isFoodMerchant(merchant, ctx.foodMerchants);
 
       return withKeys({
         // Neither a credit nor a self-transfer is a purchase. Filing either as
-        // one adds it to every spend total, so both become transfers.
-        type: (credit || selfTransfer) ? 'transfer' : food ? 'food' : 'purchase',
+        // one adds it to every spend total, so both become transfers. Nor is
+        // paying a card's bill: its purchases were already counted one by one.
+        type: (credit || selfTransfer || cardBill) ? 'transfer' : food ? 'food' : 'purchase',
         subtype: selfTransfer ? 'self_transfer'
+               : cardBill ? 'card_bill_payment'
                : credit ? (/\brefund/i.test(text) ? 'refund' : 'credit')
                : 'card_transaction',
         title: selfTransfer
           ? `Transfer to own account — ${formatMoney(money.amount, money.currency)}`
+          : cardBill
+            ? `Card bill payment — ${formatMoney(money.amount, money.currency)}`
           : credit
             ? `${merchant?.name || issuerName(m)} ${/\brefund/i.test(text) ? 'refund' : 'credit'} — ${formatMoney(money.amount, money.currency)}`
             : `${merchant?.name || 'Card transaction'} — ${formatMoney(money.amount, money.currency)}`,
@@ -1384,12 +1392,21 @@ const SENDER_RULES = [
     tier: 1,
     when: m => (/(apple|google|netflix|spotify|openai|microsoft|adobe|prime|youtube|notion|figma|dropbox|icloud)/i.test(m.from?.address || '')
                 || /\b(uber one|swiggy one|zomato gold|prime membership|membership)\b/i.test(`${m.from?.name || ''} ${m.subject || ''}`)) &&
-               /\b(receipt|invoice|subscription|renew(ed|al)?|payment|membership)\b/i.test(m.subject || ''),
+               /\b(receipt|invoice|subscription|renew(ed|al)?|payment|membership)\b/i.test(m.subject || '') &&
+               // A loyalty programme writes "membership" too: a tier upgrade,
+               // a welcome, a points statement or a renewal reminder names
+               // thresholds and dues, not a payment. A Club ITC upgrade mail
+               // once became a ₹1,60,000 subscription.
+               !/\b(upgrad\w*|tier|welcome|congratulations|points?|benefits|offers?|due|reminder|expir\w*|declined|failed)\b/i.test(m.subject || ''),
     extract: (m) => {
       const body = `${m.subject || ''}\n${m.text || ''}`;
       const money = pickTotalAmount(body);
       if (!money) return null;
-      const brand = canonicalMerchant((m.from?.address || '').split('@')[1]?.split('.')[0] || m.from?.name, 'company');
+      // The first label of the sender's domain names the brand ("netflix.com"),
+      // except when it is a mail subdomain: "t.clubitc…" made a merchant called "T".
+      const label = (m.from?.address || '').split('@')[1]?.split('.')[0] || '';
+      const generic = label.length <= 2 || /^(mail|email|e|em|news|info|noreply|no-reply|alerts?|notify|updates?|mailer)$/i.test(label);
+      const brand = canonicalMerchant((!generic && label) || m.from?.name, 'company');
       const invoice = matchReference(body, /\b(?:invoice|receipt|order)\s*(?:no\.?|#|id)?\s*[:#-]?\s*([A-Z0-9-]{6,24})\b/i);
 
       return withKeys({
@@ -1419,6 +1436,23 @@ const SENDER_RULES = [
  * because banks render the same person as "aadityavs@slc" and
  * "ADITYA VIKRAM SINGHANIA".
  */
+/**
+ * Is this the bill of a credit card being paid?
+ *
+ * Scapia's "Bill payment successful!" and "Your repayment is successful",
+ * a debit "at CREDCCBILLPAYMENT" or to cred.club: every one was filed as a
+ * purchase, and a ₹2,97,769 card bill counted as a month's shopping on top of
+ * the purchases it paid for. Paying the bill moves money between your own
+ * pockets; the spends were counted when the card alerts arrived.
+ */
+const CARD_BILL_TEXT = /\b(credit\s+card\s+bill\s+payment|bill\s+payment\s+successful|repayment\s+(?:is\s+)?successful|received\s+your\s+(?:credit\s+card\s+bill\s+)?payment|payment\s+of\s+\S+\s+towards\s+your\s+[\w\s]{0,40}credit\s+card|card\s+bill\s+paid)|ccbillpayment/i;
+const CARD_BILL_PAYEE = /^(?:cred|cred\s*club|cred\.club\S*|credccbillpayment|scapia\S*|scapiatechnolog\S*)$/i;
+export function isCardBillPayment(text, payees = []) {
+  if (/\b(declined|failed|unsuccessful)\b/i.test(text || '')) return false;
+  if (CARD_BILL_TEXT.test(text || '')) return true;
+  return payees.filter(Boolean).some(p => CARD_BILL_PAYEE.test(String(p).trim().split('@')[0].trim()));
+}
+
 export function isSelfPayee(candidates, selfIdentifiers = []) {
   if (!selfIdentifiers?.length) return false;
 

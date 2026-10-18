@@ -1,3 +1,4 @@
+// @ts-check
 // Run with: npm test
 // Covers the pure maths only — no DOM, no network. These are the functions
 // where a wrong answer is both plausible and invisible.

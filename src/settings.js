@@ -14,6 +14,16 @@ function defaults() {
 
 let cache = defaults();
 
+// The first load, as a promise. Boot no longer waits on user_settings before
+// painting the shell: the request goes out alongside the first view's own
+// queries, and anything that needs a personal number to paint awaits this.
+let readyPromise = null;
+
+/** Resolves once the first loadSettings() has settled (it never rejects). */
+export function ready() {
+  return readyPromise ?? Promise.resolve();
+}
+
 /**
  * Coerce a stored value to its declared type. jsonb round-trips types properly,
  * but a hand-edited row (or a schema change that retypes a key) shouldn't be
@@ -38,7 +48,12 @@ function coerce(key, raw) {
 }
 
 /** Fetch this user's settings and merge them over the defaults. */
-export async function loadSettings() {
+export function loadSettings() {
+  readyPromise = fetchSettings();
+  return readyPromise;
+}
+
+async function fetchSettings() {
   const next = defaults();
 
   const { data, error } = await supabase.from('user_settings').select('key, value');

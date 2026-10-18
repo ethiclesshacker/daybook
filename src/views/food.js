@@ -13,22 +13,23 @@
 // itself; nothing is re-ingested and no row is rewritten.
 // ======================================================
 
-import { Chart } from '../vendor.js';
+import { Chart } from '../chart-setup.js';
 import * as api from '../ledger/api.js';
 import { mealMeta, mealSlot, sourceMeta } from '../ledger/taxonomy.js';
 import { summariseItems, mealTitle, retitleForItems } from '../ledger/items.js';
 import {
   indexDictionary, eventNutrition, summarise, bucketDays, dishNutrition, SOURCE_LABEL,
 } from '../ledger/nutrition.js';
-import { localDateISO, entityRef } from '../ledger/normalize.js';
+import { localDateISO, entityRef, amountInr } from '../ledger/normalize.js';
 import { formatTime as fmtTime, formatDayHeading as fmtDayHeading, toLocalInput, shiftISO as shiftDay } from '../ledger/dates.js';
 import { isInflow } from '../ledger/summary.js';
 import * as settings from '../settings.js';
 import {
-  escapeHTML, formatINRFull, downloadCSV, openModal, closeModal, showToast,
-  comboboxHTML, wireCombobox, destroyChart, CHART_COLORS, renderKpiCards, emptyState,
+  escapeHTML, formatINRFull, formatMoney, isINR, downloadCSV, openModal, closeModal, showToast,
+  comboboxHTML, wireCombobox, destroyChart, CHART_COLORS, renderKpiCards, emptyState, cssVar,
 } from '../utils.js';
-import { verticalGradient, GRID_LINE } from '../charts.js';
+import { verticalGradient, GRID_LINE, withAlpha } from '../charts.js';
+import { fillSeries } from '../series.js';
 import { openEventDetail } from './ledger.js';
 
 let events = [];            // every food event, all time — the period is a filter
@@ -56,6 +57,9 @@ const formatTime = iso => fmtTime(iso, timeZone());
 const formatDayHeading = day => fmtDayHeading(day, { year: false });
 const kcalTarget = () => Number(settings.get('food_kcal_target')) || 1800;
 
+/** Money out on a food event, in rupees (amount_inr converts other currencies). */
+const rupeeSpend = event => (isInflow(event) ? 0 : amountInr(event) || 0);
+
 
 export async function renderFood(container) {
   activeTab = 'meals';
@@ -70,7 +74,7 @@ export async function renderFood(container) {
     <div class="page-header lg-header fd-header">
       <div class="page-header-left">
         <h2>Food</h2>
-        <p>What you ate, off the receipts — measured against ${escapeHTML(String(kcalTarget().toLocaleString('en-IN')))} kcal a day</p>
+        <p>What you ate, off the receipts — measured against <span id="fd-target-text">${escapeHTML(String(kcalTarget().toLocaleString('en-IN')))}</span> kcal a day</p>
       </div>
       <div class="lg-header-actions fd-period-wrap">
         <div class="chart-toggle" role="group" aria-label="Period">
@@ -104,6 +108,9 @@ export async function renderFood(container) {
         <!-- Just the graph. What it plots is already said once, in the page
              subtitle; the crossings speak for themselves in red. -->
         <div class="chart-card fd-chart-card" id="fd-chart-card" hidden>
+          <!-- What one point is. At a year it is a month's average, and a
+               line of averages read as days is a different claim. -->
+          <div class="fd-chart-caption" id="fd-chart-caption"></div>
           <div class="chart-canvas-wrap">
             <canvas id="fd-calorie-chart"></canvas>
           </div>
@@ -111,18 +118,18 @@ export async function renderFood(container) {
 
         <div class="table-section vp-panel">
           <div class="table-toolbar fd-toolbar">
-            <div class="table-tabs">
-              <button type="button" class="table-tab active" id="fd-tab-meals">
+            <div class="table-tabs" role="tablist" aria-label="Food views">
+              <button type="button" class="table-tab active" id="fd-tab-meals" role="tab" aria-selected="true">
                 <i class="fas fa-utensils" aria-hidden="true"></i>Meals
               </button>
-              <button type="button" class="table-tab" id="fd-tab-dishes">
+              <button type="button" class="table-tab" id="fd-tab-dishes" role="tab" aria-selected="false">
                 <i class="fas fa-ranking-star" aria-hidden="true"></i>Dishes
               </button>
             </div>
             <div class="lg-controls">
               <div class="search-input-wrap lg-search">
                 <i class="fas fa-search"></i>
-                <input type="text" class="search-input" id="fd-search" placeholder="Search a dish or a restaurant" />
+                <input type="search" class="search-input" id="fd-search" placeholder="Search a dish or a restaurant" aria-label="Search a dish or a restaurant" />
               </div>
               <button type="button" class="btn-sm btn-ghost fd-gap-toggle" id="fd-gaps"
                       aria-pressed="false" title="Only the meals with nothing recorded in them">
@@ -147,7 +154,7 @@ export async function renderFood(container) {
   document.getElementById('fd-fab').addEventListener('click', () => openBasket(null));
   document.getElementById('fd-tab-meals').addEventListener('click', () => switchTab('meals'));
   document.getElementById('fd-tab-dishes').addEventListener('click', () => switchTab('dishes'));
-  document.getElementById('fd-refresh-btn').addEventListener('click', () => loadData());
+  document.getElementById('fd-refresh-btn').addEventListener('click', () => { api.refresh(); loadData(); });
   document.getElementById('fd-export-btn').addEventListener('click', exportItems);
 
   document.getElementById('fd-gaps').addEventListener('click', () => {
@@ -214,8 +221,10 @@ export function unmount() {
 
 function switchTab(tab) {
   activeTab = tab;
-  document.getElementById('fd-tab-meals').classList.toggle('active', tab === 'meals');
-  document.getElementById('fd-tab-dishes').classList.toggle('active', tab === 'dishes');
+  for (const [name, id] of [['meals', 'fd-tab-meals'], ['dishes', 'fd-tab-dishes']]) {
+    document.getElementById(id)?.classList.toggle('active', tab === name);
+    document.getElementById(id)?.setAttribute('aria-selected', String(tab === name));
+  }
   paint();
 }
 
@@ -232,10 +241,15 @@ async function loadData() {
     // looks like before `npm run ledger:nutrition` has ever run — so its
     // failure is swallowed and the calorie columns simply do not appear.
     const [result, rows] = await Promise.all([
+      // The same request, with the same arguments, as the Dishes page — so the
+      // session cache (src/cache.js) answers whichever of the two opens second.
       api.searchEvents({ types: ['food'], limit: 1000 }),
       api.foodDictionary().catch(() => []),
+      settings.ready(),
     ]);
     if (token !== loadToken || !body?.isConnected) return;
+    const targetText = document.getElementById('fd-target-text');
+    if (targetText) targetText.textContent = kcalTarget().toLocaleString('en-IN');
     // A dismissed event is one you said did not happen. It stays in the
     // ledger so ingestion cannot recreate it, but it was never eaten.
     events = (result?.events || []).filter(e => e.status !== 'dismissed');
@@ -361,7 +375,7 @@ function renderMeals(list) {
 
   return `<div class="timeline">${[...byDay.entries()].map(([day, dayEvents]) => {
     const heading = day === today ? 'Today' : day === yesterday ? 'Yesterday' : formatDayHeading(day);
-    const spend = dayEvents.reduce((sum, e) => sum + (isInflow(e) ? 0 : Number(e.data?.amount) || 0), 0);
+    const spend = dayEvents.reduce((sum, e) => sum + rupeeSpend(e), 0);
     const meals = dayEvents.filter(e => e.subtype !== 'groceries').length;
     // The same thread as the chart: a day that crossed the target carries a red
     // tick here too, so scrolling the list tells the same story as the curve.
@@ -435,7 +449,7 @@ function renderMealRow(event, meta) {
                 <span class="fd-item-name">${escapeHTML(item.name)}${
                   item.options ? `<span class="fd-item-opts"> ${escapeHTML(item.options)}</span>` : ''}</span>
                 ${anyPrice ? `<span class="fd-item-amt mono">${Number.isFinite(Number(item.amount))
-                  ? escapeHTML(formatINRFull(Number(item.amount))) : ''}</span>` : ''}
+                  ? escapeHTML(formatMoney(Number(item.amount), event.data?.currency)) : ''}</span>` : ''}
               </li>`).join('')}
           </ul>`
         // The receipts that carry no dishes are the offline ones — a bill paid
@@ -455,7 +469,7 @@ function renderMealRow(event, meta) {
       </div>
 
       <div class="tl-amount mono">
-        ${Number.isFinite(amount) ? escapeHTML(formatINRFull(amount)) : ''}
+        ${Number.isFinite(amount) ? escapeHTML(formatMoney(amount, event.data?.currency)) : ''}
         ${nut.kcal !== null ? `<span class="fd-kcal ${nut.basis === 'partial' ? 'is-partial' : ''}"
           title="Estimated from ${nut.resolved} of ${nut.total} item${nut.total === 1 ? '' : 's'}${
             nut.protein ? ` · ${nut.protein} g protein` : ''}">${nut.kcal.toLocaleString('en-IN')} kcal</span>` : ''}
@@ -532,7 +546,7 @@ function openBasket(event) {
           · ${escapeHTML(formatDayHeading(localDateISO(when, zone)))}
           ${escapeHTML(formatTime(when))}
           · ${escapeHTML(meal.label)}
-          ${Number.isFinite(Number(event.data?.amount)) ? `· ${escapeHTML(formatINRFull(Number(event.data.amount)))}` : ''}
+          ${Number.isFinite(Number(event.data?.amount)) ? `· ${escapeHTML(formatMoney(Number(event.data.amount), event.data?.currency))}` : ''}
         </p>`}
 
       <div class="form-group">
@@ -796,7 +810,8 @@ function aggregateDishes(list) {
         name: item.name, count: 0, spend: 0, priced: 0, lastAt: null, places: new Set(),
       };
       dish.count += Number(item.qty) || 1;
-      if (Number.isFinite(Number(item.amount))) { dish.spend += Number(item.amount); dish.priced++; }
+      // Line items are not converted; a foreign receipt's dishes carry no spend.
+      if (Number.isFinite(Number(item.amount)) && isINR(event.data?.currency)) { dish.spend += Number(item.amount); dish.priced++; }
       if (!dish.lastAt || event.occurred_at > dish.lastAt) dish.lastAt = event.occurred_at;
       const place = event.data?.restaurant || event.data?.merchant;
       if (place) dish.places.add(place);
@@ -905,9 +920,21 @@ function renderCalorieChart() {
   const span = Math.round((new Date(to) - new Date(from)) / 86_400_000) + 1;
   const grain = span <= 45 ? 'day' : span <= 200 ? 'week' : 'month';
 
-  const buckets = bucketDays(n.days, grain);
+  // Every day (or week, or month) in the period gets a slot; one with no
+  // priced meal is null, and the line breaks there instead of drawing a
+  // straight segment across days nobody recorded.
+  const buckets = fillSeries(bucketDays(n.days, grain), { grain, from, to })
+    .map(b => (b.empty ? { at: b.at, kcal: null, protein: 0, days: 0, meals: 0 } : b));
   const target = kcalTarget();
-  const over = buckets.map(b => b.kcal > target);
+  const over = buckets.map(b => b.kcal !== null && b.kcal > target);
+
+  const caption = document.getElementById('fd-chart-caption');
+  if (caption) {
+    caption.textContent = grain === 'day'
+      ? 'kcal per day'
+      : `kcal per eating day, ${grain === 'week' ? 'weekly' : 'monthly'} average`;
+  }
+  const danger = CHART_COLORS.danger;
 
   calorieChartRef = destroyChart(calorieChartRef);
   const canvas = document.getElementById('fd-calorie-chart');
@@ -927,14 +954,16 @@ function renderCalorieChart() {
           backgroundColor: gradient,
           borderWidth: 2,
           fill: true,
-          tension: 0.35,
+          // Readings joined by straight lines and broken where there are none.
+          tension: 0,
+          spanGaps: false,
           // The red points ARE the feature: a day that crossed the target is
           // marked on the curve itself, not in a legend. Everything under the
           // line stays quiet so the crossings are the only thing that shouts.
           pointRadius: buckets.map((b, i) => (over[i] ? 4.5 : grain === 'day' && buckets.length > 45 ? 0 : 2.5)),
           pointHoverRadius: 7,
-          pointBackgroundColor: over.map(o => (o ? CHART_COLORS.danger : CHART_COLORS.accent)),
-          pointBorderColor: over.map(o => (o ? 'rgba(239,68,68,0.35)' : 'transparent')),
+          pointBackgroundColor: over.map(o => (o ? danger : CHART_COLORS.accent)),
+          pointBorderColor: over.map(o => (o ? withAlpha(danger, 0.35) : 'transparent')),
           pointBorderWidth: over.map(o => (o ? 3 : 0)),
         },
         {
@@ -942,7 +971,9 @@ function renderCalorieChart() {
           // tooltips with everything else for free.
           label: 'Target',
           data: buckets.map(() => target),
-          borderColor: 'rgba(148,163,184,0.5)',
+          // Named on the chart itself, at the right-hand end (chart-setup.js).
+          refLabel: `${target.toLocaleString('en-IN')} kcal target`,
+          borderColor: withAlpha(cssVar('--text-muted', '#8b9ab0'), 0.6),
           borderWidth: 1,
           borderDash: [5, 5],
           pointRadius: 0,
@@ -961,6 +992,7 @@ function renderCalorieChart() {
           callbacks: {
             label: (ctx) => {
               const b = buckets[ctx.dataIndex];
+              if (b.kcal === null) return ' Nothing priced';
               const versus = b.kcal > target
                 ? ` — ${(b.kcal - target).toLocaleString('en-IN')} over target`
                 : ` — ${(target - b.kcal).toLocaleString('en-IN')} under target`;
@@ -990,7 +1022,7 @@ function renderCalorieChart() {
           // Keep the target line inside the plot even on a light week.
           suggestedMax: Math.round(target * 1.15),
           grid: { color: GRID_LINE },
-          ticks: { callback: v => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v) },
+          ticks: { callback: v => Number(v).toLocaleString('en-IN') },
         },
       },
     },
@@ -1010,7 +1042,7 @@ function renderKPIs() {
 
   const meals = list.filter(e => e.subtype !== 'groceries');
   const todayMeals = meals.filter(e => localDateISO(e.occurred_at, zone) === today);
-  const spend = list.reduce((sum, e) => sum + (isInflow(e) ? 0 : Number(e.data?.amount) || 0), 0);
+  const spend = list.reduce((sum, e) => sum + rupeeSpend(e), 0);
   const top = aggregateDishes(list)[0];
 
   // Calories only when the dictionary can actually answer. Before the resolver

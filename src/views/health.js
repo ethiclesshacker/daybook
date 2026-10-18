@@ -13,15 +13,16 @@
 // also available as a table.
 // ======================================================
 
-import { Chart } from '../vendor.js';
+import { Chart } from '../chart-setup.js';
 import * as health from '../health/api.js';
 import {
   shiftISO, shortDay, longDay, formatHours, summarise, fillHours,
 } from '../health/summary.js';
 import {
-  destroyChart, escapeHTML, cssVar, renderKpiCards, todayISO, CHART_COLORS, emptyState,
+  destroyChart, escapeHTML, cssVar, renderKpiCards, todayISO, CHART_COLORS, emptyState, timeAgo,
 } from '../utils.js';
-import { destroyCharts } from '../charts.js';
+import { destroyCharts, withAlpha } from '../charts.js';
+import { fillSeries } from '../series.js';
 
 const RANGES = [7, 30, 90];
 const RANGE_KEY = 'finance-hub-health-range';
@@ -147,7 +148,28 @@ function chartCard(id, title, subtitle, extra = '') {
 
 function energyLegend() {
   const item = (color, label) => `<span class="hl-legend-item"><span class="hl-swatch" style="background:${color}"></span>${label}</span>`;
-  return `<div class="hl-legend" aria-hidden="true">${item(ENERGY.burned, 'Burned')}${item(ENERGY.eaten, 'Eaten')}<span class="hl-legend-item"><span class="hl-swatch hl-swatch--line"></span>Target</span></div>`;
+  return `<div class="hl-legend" aria-hidden="true">${item(ENERGY.burned, 'Burned')}${item(ENERGY.eaten, 'Eaten')}<span class="hl-legend-item"><span class="hl-swatch hl-swatch--hatch" style="--swatch:${ENERGY.eaten}"></span>Eaten, incomplete</span><span class="hl-legend-item"><span class="hl-swatch hl-swatch--line"></span>Target</span></div>`;
+}
+
+/**
+ * Diagonal stripes over an outline, for an eaten figure that is only a floor
+ * (a meal that could not be priced, or today). Paler alone read as a lighter
+ * shade of the same thing; stripes read as "not the whole story".
+ */
+function hatch(ctx, color) {
+  const tile = document.createElement('canvas');
+  tile.width = tile.height = 8;
+  const t = tile.getContext('2d');
+  t.fillStyle = withAlpha(color, 0.18);
+  t.fillRect(0, 0, 8, 8);
+  t.strokeStyle = withAlpha(color, 0.85);
+  t.lineWidth = 2;
+  t.beginPath();
+  t.moveTo(-2, 10); t.lineTo(10, -2);
+  t.moveTo(6, 10); t.lineTo(10, 6);
+  t.moveTo(-2, 2); t.lineTo(2, -2);
+  t.stroke();
+  return ctx.createPattern(tile, 'repeat');
 }
 
 function sleepLegend() {
@@ -169,14 +191,17 @@ async function load() {
     ]);
     if (token !== loadToken || !document.getElementById('hl-kpis')) return;
 
-    state.days = days || [];
+    // One slot per calendar day, even the ones the phone sent nothing for, so
+    // a line breaks across a missing day instead of bridging it.
+    state.days = fillSeries(days || [], { grain: 'day', from, to, keyOf: d => d.day, at: 'day' })
+      .map(d => (d.empty ? { day: d.day } : d));
     state.nights = nights || [];
     state.workouts = workouts || [];
     state.life = life || [];
 
     const sub = document.getElementById('hl-sub');
     if (sub) sub.textContent = cat?.last_sync_at
-      ? `Apple Health · last synced ${relativeTime(cat.last_sync_at)}`
+      ? `Apple Health · last synced ${timeAgo(cat.last_sync_at)}`
       : 'Apple Health, synced from your iPhone';
 
     if (!cat?.types?.length) {
@@ -206,13 +231,7 @@ async function load() {
   }
 }
 
-function relativeTime(iso) {
-  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
-  if (mins < 2) return 'just now';
-  if (mins < 60) return `${mins} min ago`;
-  if (mins < 48 * 60) return `${Math.round(mins / 60)} h ago`;
-  return `${Math.round(mins / 1440)} days ago`;
-}
+// relativeTime() was a fourth copy of "x min ago"; it is utils.timeAgo now.
 
 // ── KPIs ────────────────────────────────────────────────
 
@@ -372,8 +391,10 @@ function renderEnergy() {
   const byDay = new Map(state.life.map(d => [d.day, d.energy || {}]));
   const energy = state.days.map(d => byDay.get(d.day) || {});
   const target = energy.find(e => e.target_kcal)?.target_kcal ?? null;
-  // A provisional eaten figure is drawn paler: it is a floor, not a total.
-  const pale = hex => `${hex}73`;
+  // A provisional eaten figure is drawn hatched and outlined: it is a floor,
+  // not a total. (It used to be the same bar, paler — too close to tell.)
+  const canvasCtx = document.getElementById('hl-energy')?.getContext('2d');
+  const provisional = canvasCtx ? hatch(canvasCtx, ENERGY.eaten) : withAlpha(ENERGY.eaten, 0.45);
   const options = baseOptions({ unit: 'kcal' });
   options.plugins.tooltip.callbacks.footer = items => {
     const e = energy[items[0].dataIndex];
@@ -391,9 +412,13 @@ function renderEnergy() {
       datasets: [
         { label: 'Burned', data: energy.map(e => e.burned_kcal ?? null), backgroundColor: ENERGY.burned, ...bar },
         { label: 'Eaten', data: energy.map(e => e.eaten_kcal ?? null),
-          backgroundColor: energy.map(e => (e.complete ? ENERGY.eaten : pale(ENERGY.eaten))), ...bar },
+          backgroundColor: energy.map(e => (e.complete ? ENERGY.eaten : provisional)),
+          borderColor: ENERGY.eaten,
+          borderWidth: energy.map(e => (e.complete ? 0 : 1.5)),
+          ...bar },
         ...(target ? [{
           type: 'line', label: 'Target', data: state.days.map(() => target),
+          refLabel: `${Math.round(target).toLocaleString('en-IN')} kcal target`,
           borderColor: cssVar('--text-muted', '#94a3b8'), borderWidth: 1.5, borderDash: [4, 4],
           pointRadius: 0, pointHoverRadius: 0, fill: false,
         }] : []),
@@ -409,6 +434,9 @@ function renderLine(key, canvasId, field, unit, color) {
   // change into a straight line.
   options.scales.y.beginAtZero = false;
   options.scales.y.grace = '15%';
+  // The unit on the axis itself: a column of 52, 54, 58 is beats per minute
+  // on one chart and milliseconds on the next.
+  options.scales.y.title = { display: true, text: unit, color: cssVar('--text-muted', '#8b9ab0') };
   const sparse = state.days.length > 45;
   draw(key, canvasId, {
     type: 'line',
@@ -418,9 +446,11 @@ function renderLine(key, canvasId, field, unit, color) {
         label: unit === 'bpm' ? 'Resting HR' : 'HRV',
         data: state.days.map(d => d[field] ?? null),
         borderColor: color, backgroundColor: color, borderWidth: 2,
-        // Monotone, so the curve never dips below a reading it did not take.
-        cubicInterpolationMode: 'monotone',
-        pointRadius: sparse ? 0 : 3, pointHoverRadius: 5, spanGaps: true,
+        // Straight segments between readings, and a break where a day has
+        // none. The monotone curve with spanGaps drew a smooth line straight
+        // through days the Watch was not worn.
+        tension: 0,
+        pointRadius: sparse ? 0 : 3, pointHoverRadius: 5, spanGaps: false,
       }],
     },
     options,

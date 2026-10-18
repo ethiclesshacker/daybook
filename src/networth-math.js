@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Net worth computations — single source of truth.
 // All views must use these instead of inline arithmetic.

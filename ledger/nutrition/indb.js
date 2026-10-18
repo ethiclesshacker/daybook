@@ -1,3 +1,4 @@
+// @ts-check
 // ======================================================
 // Anuvaad INDB — measured Indian recipes, used two ways.
 //

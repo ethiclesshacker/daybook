@@ -111,7 +111,9 @@ Two mechanisms keep it there:
 - **The fingerprint cache.** `sender + digit-masked subject shape`. A shape seen
   three times that has never produced an event stops being sent to the model.
   It only ever suppresses negatives, so it cannot hide an event a rule would
-  have caught.
+  have caught. It learns only from verdicts: a source written without the
+  model's answer (model disabled, needs-review) carries `fingerprint_unlearned`
+  instead of `fingerprint`, and `ledger_fingerprint_stats` ignores it.
 
 ### Line items
 
@@ -498,10 +500,32 @@ dismissed event stays dismissed.
 
 ### Checkpoints
 
-Per account and folder: `{uidValidity, lastUid}`. The checkpoint moves **after**
+Per account and folder: `{uidValidity, lastUid, retry?}`. The checkpoint moves **after**
 events are committed, so a crash costs a re-read (free, by design) rather than
 a permanent gap. A changed `UIDVALIDITY` means the server renumbered the
 mailbox, and the folder is rescanned from its lookback window.
+
+A message the run read but could not *judge* gets no source row and no
+verdict: the model call failed (a 401, a timeout, an omitted index), the
+per-run call ceiling stopped short of it, a rule threw, the body would not
+parse, or its write was refused. `lastUid` still moves on, but the message goes
+on the folder's `retry` list (`{uid, message_id, reason, error, attempts, …}`),
+and every run fetches that list again before anything new. Writing those as
+"model returned no event" is how 14–18 October 2026 went missing, and it would
+also have taught the fingerprint cache that the sender never mails events.
+
+`attempts` counts only failures that are the message's own: a parse, rule or
+write error, or a model error in a run where the model answered other batches.
+An outage or the ceiling never counts, so a long outage is simply caught up
+once the key works. After 5 counted attempts the message is written as a
+source with `metadata.needs_review = true` and a `needs review: …` verdict,
+without its fingerprint (so the cache does not learn from it) or snippet; an
+entry that cannot be written even then is dropped after 10 and reported as
+`abandoned` in the run's errors.
+
+A run that left anything on the retry list, or hit any error other than a
+merge conflict, is `partial`; `ledger:ingest` then exits 2 (1 for `failed`),
+so `launchctl list` shows it.
 
 ---
 
@@ -788,3 +812,49 @@ Confidence is left as it was. What the language model read on its own stays in
 the queue, which is what its 0.88 cap is for. Every change is in the audit log as
 `event_auto_confirmed` with its reason, and `ledger_undo_auto_confirm(since)`
 puts them back.
+
+## Money in rupees, and one vocabulary (0019–0025)
+
+**Currency.** `public.ledger_amount_inr(data, occurred_at)` (0019) is the one
+place an amount becomes rupees: rupees pass through, a fiat currency is
+converted at the month's rate in `public.fx_rates` (monthly mean of the ECB
+reference rate, via frankfurter.app), and a unit that is not money (NeuCoins,
+any non-ISO code) or a currency with no rate gives NULL — so it is never in a
+cash total. Every summing function uses it (`ledger_stats`, `life_days`,
+`ledger_get_entity`), every event read through the API carries it as
+`amount_inr`, and JS reads that (`amountInr()` in `normalize.js`) rather than
+converting again. The events trigger spells `data.currency` as ISO 4217 on
+every write (`ledger_normalize_currency`, JS twin `normalizeCurrency`). Add a
+month's rate with an `insert … on conflict do update` into `fx_rates`.
+
+**Taxonomy.** `src/ledger/taxonomy.js` holds the canonical subtypes per type,
+the spend categories and the budget bucket each counts against (the six
+buckets of the monthly budget), the synonyms sources use, note-type words,
+merchant patterns and the outlier rule. `public.ledger_taxonomy()` (0020)
+returns the same JSON, and `test/taxonomy.test.js` fails if they drift. The
+before-write trigger (0021) lands every write canonical — email, the model,
+Hermes, the app — keeping what a source originally said in `inference.raw`
+and recording where the category came from in `inference.category_source`
+(`user` is never re-derived). The model's extraction schema and Hermes' write
+tools take the same enums; `runTool()` refuses anything else and lists the
+valid values.
+
+A category is derived in this order: your note's type word, a type/subtype
+pair that settles it, the old subtype if it was a category word, what the
+source said, the merchant's name, the type's default — and, after every
+ingest, an event still `other` borrows what its merchant's other events agree
+on (`ledger_learn_categories`).
+
+**Entities.** Names normalise without apostrophes and with a lone "s"
+re-joined, so "Kapoor's Cafe", "KAPOOR S CAFE" and "Kapoors Cafe" are one.
+`merchant`, `restaurant` and `company` are one family for resolution, so a card
+alert and a receipt meet at one entity. A merge keeps the absorbed row,
+marked `metadata.merged_into`; ingestion that names it lands on the target.
+
+**The outlier guard.** A non-manual event whose spend is over ₹25,000 outside
+travel, rent, vehicle, insurance, investments, tax, electronics and education,
+or a subscription over ₹5,000, is set to `needs_review` with
+`inference.review_reason` — unless you already confirmed the same charge at the
+same merchant (within 15%) or confirmed its points row. Confirming it records
+`review_cleared`; `ledger_auto_confirm()` never confirms a flagged event on
+the strength of its sources.

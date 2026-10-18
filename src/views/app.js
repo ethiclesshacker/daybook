@@ -1,21 +1,29 @@
 import { supabase } from '../supabase.js';
 import * as settings from '../settings.js';
 import { escapeHTML } from '../utils.js';
-import { navigateTo, registerRoute, startRouter } from '../router.js';
+import { navigateTo, registerLazyRoute, startRouter, prefetchRoute } from '../router.js';
 import { NAV_ITEMS } from '../routes.js';
-import * as dashboard from './dashboard.js';
-import * as networth from './networth.js';
-import * as points from './points.js';
-import * as fi from './fi.js';
-import * as settings_ from './settings.js';
-import * as ledger from './ledger.js';
-import * as food from './food.js';
-import * as dishes from './dishes.js';
-import * as health from './health.js';
 
 // Each view module exports `render(container)` and, where it holds charts,
-// grids, timers or document listeners, `unmount()`.
-const VIEWS = { dashboard, networth, points, fi, ledger, food, dishes, health, settings: settings_ };
+// grids, timers or document listeners, `unmount()`. Every one is its own
+// chunk now, fetched on first visit: one 722 KB bundle used to hold all nine
+// screens, Chart.js and the ledger's sentence parser in front of the first
+// paint of any of them.
+const VIEWS = {
+  dashboard: () => import('./dashboard.js'),
+  networth:  () => import('./networth.js'),
+  points:    () => import('./points.js'),
+  // Hidden with its nav item (routes.js); the module is kept, not deleted.
+  // fi:     () => import('./fi.js'),
+  ledger:    () => import('./ledger.js'),
+  food:      () => import('./food.js'),
+  dishes:    () => import('./dishes.js'),
+  health:    () => import('./health.js'),
+  settings:  () => import('./settings.js'),
+};
+
+// Below this the sidebar is an off-canvas drawer (style.css, 900px).
+const DRAWER_QUERY = '(max-width: 900px)';
 
 // Private-mode Safari throws on localStorage, and a thrown preference must
 // not take the navigation down with it.
@@ -28,8 +36,7 @@ function isRailCollapsed() {
 export function renderApp(session) {
   // Register all routes — the same list the sidebar is drawn from.
   for (const { id } of NAV_ITEMS) {
-    const view = VIEWS[id];
-    registerRoute(id, view.render, view.unmount);
+    if (VIEWS[id]) registerLazyRoute(id, VIEWS[id]);
   }
 
   const userEmail = session?.user?.email || '';
@@ -87,15 +94,26 @@ export function renderApp(session) {
           `).join('')}
         </div>
 
+        <!-- The account opens a menu, and Sign out is a labelled item in it.
+             It was a bare icon at the edge of the profile row, one stray click
+             from ending the session. -->
         <div class="sidebar-footer">
-          <div class="user-profile">
-            <div class="user-avatar">${escapeHTML(userName[0].toUpperCase())}</div>
-            <div class="user-info">
-              <div class="user-name">${escapeHTML(userName)}</div>
-              <div class="user-email" title="${escapeHTML(userEmail)}">${escapeHTML(userEmail) || 'Signed in'}</div>
+          <div class="user-menu-wrap">
+            <div class="user-menu" id="user-menu" hidden>
+              <button type="button" class="user-menu-item" id="sign-out-btn">
+                <i class="fas fa-arrow-right-from-bracket" aria-hidden="true"></i>
+                <span>Sign out</span>
+              </button>
             </div>
-            <button type="button" class="sign-out-btn" id="sign-out-btn" title="Sign out" aria-label="Sign out">
-              <i class="fas fa-arrow-right-from-bracket" aria-hidden="true"></i>
+            <button type="button" class="user-profile" id="user-menu-btn"
+                    aria-haspopup="true" aria-expanded="false" aria-controls="user-menu" title="Account">
+              <div class="user-avatar" id="user-avatar" aria-hidden="true">${escapeHTML(userName[0].toUpperCase())}</div>
+              <div class="user-info">
+                <div class="user-name" id="user-name">${escapeHTML(userName)}</div>
+                <div class="user-email" title="${escapeHTML(userEmail)}">${escapeHTML(userEmail) || 'Signed in'}</div>
+              </div>
+              <i class="fas fa-chevron-up user-menu-caret" aria-hidden="true"></i>
+              <span class="sr-only">Account menu</span>
             </button>
           </div>
         </div>
@@ -114,10 +132,41 @@ export function renderApp(session) {
       navigateTo(item.dataset.view);
       closeSidebar();
     });
+    // Pointing at a screen is a good hint you are about to open it.
+    item.addEventListener('pointerenter', () => prefetchRoute(item.dataset.view), { once: true });
+    item.addEventListener('focus', () => prefetchRoute(item.dataset.view), { once: true });
+  });
+
+  // The display name lives in user_settings, which now loads alongside the
+  // first screen instead of before the shell. Fill it in when it arrives.
+  settings.ready().then(() => {
+    const name = settings.get('display_name');
+    if (!name) return;
+    const nameEl = document.getElementById('user-name');
+    const avatarEl = document.getElementById('user-avatar');
+    if (nameEl) nameEl.textContent = name;
+    if (avatarEl) avatarEl.textContent = name[0].toUpperCase();
+  });
+
+  // ── Account menu ─────────────────────────────────────
+  const menuBtn = document.getElementById('user-menu-btn');
+  const menu = document.getElementById('user-menu');
+  const setMenu = open => {
+    menu.hidden = !open;
+    menuBtn.setAttribute('aria-expanded', String(open));
+    if (open) menu.querySelector('button')?.focus();
+  };
+  menuBtn.addEventListener('click', () => setMenu(menu.hidden));
+  document.addEventListener('click', e => {
+    if (!menu.hidden && !e.target.closest('.user-menu-wrap')) setMenu(false);
+  });
+  menu.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); setMenu(false); menuBtn.focus(); }
   });
 
   // Sign out
   document.getElementById('sign-out-btn').addEventListener('click', async () => {
+    setMenu(false);
     await supabase.auth.signOut();
   });
 
@@ -146,21 +195,37 @@ export function renderApp(session) {
   const overlay   = document.getElementById('sidebar-overlay');
   const sidebar   = document.getElementById('sidebar');
 
+  // A closed drawer is off-canvas, not gone: without `inert` its links stay in
+  // the tab order and the screen reader's reading order, invisible.
+  const drawerMedia = window.matchMedia(DRAWER_QUERY);
+  const syncInert = () => {
+    const closed = !sidebar.classList.contains('open');
+    sidebar.inert = drawerMedia.matches && closed;
+  };
+  drawerMedia.addEventListener?.('change', syncInert);
+
   hamburger?.addEventListener('click', () => {
     sidebar.classList.add('open');
     overlay.classList.add('visible');
     hamburger.setAttribute('aria-expanded', 'true');
+    syncInert();
+    sidebar.querySelector('.nav-item.active, .nav-item')?.focus();
   });
   overlay?.addEventListener('click', closeSidebar);
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeSidebar();
+    if (e.key === 'Escape' && sidebar.classList.contains('open')) {
+      closeSidebar();
+      hamburger?.focus();
+    }
   });
 
   function closeSidebar() {
     sidebar?.classList.remove('open');
     overlay?.classList.remove('visible');
     hamburger?.setAttribute('aria-expanded', 'false');
+    syncInert();
   }
+  syncInert();
 
   // Load initial view
   startRouter();

@@ -1,3 +1,4 @@
+// @ts-check
 // Hash-based SPA router
 // URLs: /#dashboard, /#networth, /#points, /#ledger, /#food, /#dishes, /#health
 // Handles refresh, back/forward, and deep-links automatically.
@@ -6,11 +7,19 @@
 // previous one's unmount runs, which is where charts, grids, timers and
 // document-level listeners are released — without it every visit to a screen
 // leaked the last visit's Chart.js instances and their resize observers.
+//
+// A route can also be registered lazily, as a `load()` that resolves to the
+// view module — `() => import('./views/food.js')` — so each screen is its own
+// chunk, fetched the first time it is opened rather than in front of the
+// first paint of every screen.
 
 import { VIEW_IDS, FALLBACK_VIEW } from './routes.js';
 
 const routes = {};
 let currentId = null;
+// Bumped on every navigation, so a slow chunk for a view the user has already
+// left does not render over the one they went to.
+let renderToken = 0;
 
 /**
  * @param {string} id
@@ -19,6 +28,28 @@ let currentId = null;
  */
 export function registerRoute(id, render, unmount) {
   routes[id] = { render, unmount };
+}
+
+/**
+ * Register a view whose module is fetched on first visit.
+ * @param {string} id
+ * @param {() => Promise<{render: Function, unmount?: Function}>} load
+ */
+export function registerLazyRoute(id, load) {
+  let module = null;
+  routes[id] = {
+    async resolve() {
+      module ??= await load();
+      return module;
+    },
+    get render() { return module?.render; },
+    get unmount() { return module?.unmount; },
+  };
+}
+
+/** Start fetching a lazy view's chunk without rendering it (hover / idle prefetch). */
+export function prefetchRoute(id) {
+  routes[id]?.resolve?.().catch(() => {});
 }
 
 /** Read the current hash and return the view ID it maps to. */
@@ -43,7 +74,7 @@ export function navigateTo(viewId) {
 
 function _render(viewId) {
   // Update nav active state
-  document.querySelectorAll('.nav-item[data-view]').forEach(item => {
+  /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('.nav-item[data-view]')).forEach(item => {
     const isActive = item.dataset.view === viewId;
     item.classList.toggle('active', isActive);
     // Tell assistive tech which view is current, not just which one is blue.
@@ -61,11 +92,39 @@ function _render(viewId) {
   }
 
   const route = routes[viewId] || routes[FALLBACK_VIEW];
+  const changed = currentId !== viewId;
   currentId = route ? viewId : null;
-  if (route?.render) {
-    Promise.resolve(route.render(container))
-      .catch(err => console.error(`[router] render ${viewId} failed:`, err));
+  const token = ++renderToken;
+
+  // A new screen starts at its top. The router never reset scroll, so opening
+  // Settings from the foot of a long timeline landed halfway down Settings.
+  // Viewport-locked pages (.vp-page) scroll inside their own panel and are
+  // rebuilt fresh, so resetting the page itself is all either kind needs.
+  if (changed) {
+    window.scrollTo(0, 0);
+    const main = document.getElementById('main-content');
+    if (main) main.scrollTop = 0;
   }
+
+  if (!route) return;
+  if (route.resolve && !route.render) {
+    // First visit to a lazy screen: a skeleton while its chunk arrives.
+    container.innerHTML = '<div class="page-body"><div class="skeleton skeleton--table"></div></div>';
+  }
+  Promise.resolve(route.resolve ? route.resolve() : route)
+    .then(() => {
+      if (token !== renderToken) return;   // the user has already moved on
+      return route.render?.(container);
+    })
+    .catch(err => {
+      console.error(`[router] render ${viewId} failed:`, err);
+      if (token === renderToken && route.resolve && !route.render) {
+        // The chunk itself failed — usually a deploy replaced it under an open tab.
+        container.innerHTML = `<div class="page-body"><div class="dash-banner dash-banner--error" role="alert">
+          <div><strong>This screen could not load.</strong>
+          <div class="dash-banner-sub">Reload the page to fetch the latest version.</div></div></div></div>`;
+      }
+    });
 }
 
 let isListenerAdded = false;

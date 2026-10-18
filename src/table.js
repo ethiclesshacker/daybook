@@ -15,6 +15,10 @@
 //   table.setQuery('uber');  // back to page one
 //   table.rows();            // what is shown, filtered and sorted, every page
 //
+// A column with `hideWhenEmpty: true` is left out while every row's value is
+// 0 or missing — a Mutual Funds column of ₹0 down every snapshot is width
+// spent saying nothing.
+//
 // The rules themselves live in table-core.js.
 // ======================================================
 
@@ -50,6 +54,7 @@ export function createTable(container, {
     sort: prefs.sort && cols.some(c => c.key === prefs.sort.key && c.sortable) ? prefs.sort : defaultSort,
   };
   let view = [];
+  let shown = cols;   // cols minus any hideWhenEmpty column with nothing in it
 
   container.classList.add('dt');
   container.addEventListener('click', onClick);
@@ -58,10 +63,14 @@ export function createTable(container, {
 
   function recompute() {
     view = sortRows(filterRows(state.rows, cols, state.query), cols, state.sort);
+    shown = cols.filter(c => !c.hideWhenEmpty || state.rows.some(row => {
+      const v = c.value ? c.value(row) : row[c.key];
+      return v !== null && v !== undefined && v !== '' && Number(v) !== 0;
+    }));
   }
 
   function header() {
-    return cols.map(c => {
+    return shown.map(c => {
       const active = state.sort?.key === c.key;
       const ariaSort = active ? (state.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none';
       const attrs = `scope="col"${c.align === 'end' ? ' data-align="end"' : ''}${c.sortable ? ` aria-sort="${ariaSort}"` : ''}`;
@@ -114,7 +123,7 @@ export function createTable(container, {
   function render() {
     const p = paginate(view.length, state.page, state.size);
     state.page = p.page;
-    const body = view.slice(p.start, p.end).map(row => `<tr>${cols.map(c => {
+    const body = view.slice(p.start, p.end).map(row => `<tr>${shown.map(c => {
       const content = c.render ? c.render(row) : escapeHTML(row[c.key] ?? '—');
       return `<td${c.align === 'end' ? ' data-align="end"' : ''}>${content}</td>`;
     }).join('')}</tr>`).join('');
@@ -129,7 +138,7 @@ export function createTable(container, {
       <div class="dt-scroll">
         <table class="dt-table">
           <thead><tr>${header()}</tr></thead>
-          <tbody>${body || `<tr><td class="dt-empty" colspan="${cols.length}">${none}</td></tr>`}</tbody>
+          <tbody>${body || `<tr><td class="dt-empty" colspan="${shown.length}">${none}</td></tr>`}</tbody>
         </table>
       </div>
       ${view.length ? footer(p) : ''}`;

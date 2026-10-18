@@ -1,3 +1,4 @@
+// @ts-check
 import { computeNet } from './networth-math.js';
 
 // ======================================================
@@ -21,8 +22,8 @@ function toISODate(d) {
 export function monthsBetween(fromISO, toISO) {
   const from = new Date(fromISO + 'T00:00:00');
   const to   = new Date(toISO + 'T00:00:00');
-  if (isNaN(from) || isNaN(to)) return 0;
-  return (to - from) / (1000 * 60 * 60 * 24 * 30.4375);
+  if (isNaN(from.getTime()) || isNaN(to.getTime())) return 0;
+  return (to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24 * 30.4375);
 }
 
 /**

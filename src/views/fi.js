@@ -1,4 +1,4 @@
-import { Chart } from '../vendor.js';
+import { Chart } from '../chart-setup.js';
 import { listEntries } from '../networth/api.js';
 import * as settings from '../settings.js';
 import {
