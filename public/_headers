@@ -1,8 +1,10 @@
 # Cloudflare Pages response headers.
 #
-# Chart.js, Grid.js, Font Awesome and Inter are bundled from npm now, so the
-# only cross-origin traffic left is Supabase (auth + REST + realtime) and
-# frankfurter.dev (the EUR→INR rate). Everything else is 'self'.
+# Chart.js, Font Awesome and Inter are bundled from npm now, so the only
+# cross-origin traffic left is Supabase (auth + REST) and frankfurter.dev (the
+# EUR→INR rate). Everything else is 'self'. Realtime is not used — the client
+# is built from auth-js + postgrest-js (src/supabase.js) — so there is no
+# wss://*.supabase.co in connect-src; add it back if a channel is ever opened.
 #
 # `style-src` keeps 'unsafe-inline' because the views build markup with inline
 # style="" attributes; removing it means refactoring those out first.
@@ -16,7 +18,7 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: geolocation=(), microphone=(), camera=(), interest-cohort=()
   Strict-Transport-Security: max-age=31536000; includeSubDomains
-  Content-Security-Policy: default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.frankfurter.dev
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co https://api.frankfurter.dev
 
 # Hashed assets are immutable — index.html must never be cached, or a deploy
 # leaves browsers pointing at asset filenames that no longer exist.
@@ -24,4 +26,9 @@
   Cache-Control: public, max-age=31536000, immutable
 
 /index.html
+  Cache-Control: no-cache
+
+# The page is served at / far more often than at /index.html, and a cached /
+# is exactly the stale-asset-names problem above.
+/
   Cache-Control: no-cache

@@ -1,3 +1,10 @@
+# A missing hashed asset is a real 404, not the app shell. Without this line
+# the fallback below answered a stale /assets/views-abc123.js with index.html
+# and a 200, and the browser failed to parse HTML as a script — the screen
+# simply never loaded. With code-split views that is the deploy-under-an-open-
+# tab case, and the router shows "reload" when a chunk fails.
+/assets/*  /assets/:splat  404
+
 # SPA fallback. Routing is hash-based, so deep links already resolve, but this
 # keeps a stray /networth (or a mistyped path) on the app instead of a 404.
 /*    /index.html   200
