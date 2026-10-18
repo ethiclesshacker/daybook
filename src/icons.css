@@ -1001,6 +1001,9 @@
 .fa-calendar-days {
   --fa: "\f073";
 }
+.fa-comment {
+  --fa: "\f075";
+}
 .fa-chevron-up {
   --fa: "\f077";
 }
