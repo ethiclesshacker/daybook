@@ -33,6 +33,7 @@ Rules:
 - If the digest is thin, the summary is thin. Do not pad it.
 - When the plain rendering has Body, Weight, Energy or Activity lines, carry every number in them. If the energy balance is marked provisional, or covers only some days, say exactly that — never present it as the whole period.
 - Repeat the open questions and gaps verbatim in meaning — they are the honest part.
+- Rupees in whole numbers with Indian grouping (₹1,858, never ₹94.58). Categories in plain words (food delivery, not food_delivery); never name a payment method (card_transaction, upi_payment) as what money was spent on.
 - Second person, plain language, no motivational commentary. ${maxWords} words maximum.`;
 
 export async function summarize(options = {}) {
