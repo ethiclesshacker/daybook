@@ -374,8 +374,9 @@ export async function pdfText(content, { timeoutMs = PDF_TIMEOUT_MS } = {}) {
   if (!content?.length) return null;
   let doc = null;
   let timer;
+  let work = null;
   try {
-    const work = (async () => {
+    work = (async () => {
       // A copy: pdf.js takes ownership of the buffer it is given.
       doc = await getDocumentProxy(new Uint8Array(content), {
         isEvalSupported: false,
@@ -395,7 +396,14 @@ export async function pdfText(content, { timeoutMs = PDF_TIMEOUT_MS } = {}) {
     return null;
   } finally {
     clearTimeout(timer);
-    try { await doc?.destroy(); } catch { /* already gone */ }
+    if (doc) {
+      try { await doc.destroy(); } catch { /* already gone */ }
+    } else {
+      // Timed out while pdf.js was still opening the file: the document does
+      // not exist yet, so destroy it when it does, or the worker stays alive
+      // for the rest of the job.
+      work?.finally(() => doc?.destroy()).catch(() => {});
+    }
   }
 }
 
