@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy — Daybook</title>
+<!--
+  A plain page, served as a file by Cloudflare Pages, so it exists at
+  /privacy.html without the app loading. Google's OAuth consent screen needs
+  a privacy-policy URL before a project can leave "testing" mode; this is it.
+  Written to be true rather than legal: one user, one person's data.
+-->
+<style>
+  body{margin:0;background:#0a0f1e;color:#b4c0d0;font:16px/1.65 system-ui,sans-serif}
+  main{max-width:40rem;margin:0 auto;padding:3rem 1rem 4rem}
+  h1,h2{color:#e6edf5;font-weight:600;line-height:1.25}
+  h1{font-size:1.75rem;margin:0 0 .25rem}
+  h2{font-size:1.1rem;margin:2rem 0 .5rem}
+  p{margin:.6rem 0}
+  a{color:#38bdf8}
+  .muted{color:#8b9ab0;font-size:.9rem}
+</style>
+</head>
+<body>
+<main>
+  <h1>Daybook — privacy</h1>
+  <p class="muted">Last updated 24 October 2026</p>
+
+  <p>Daybook is a personal record kept by one person, for that person. It is not a service offered to the public: there is no sign-up, no other users, and nobody else's data in it.</p>
+
+  <h2>What it holds</h2>
+  <p>Money (net-worth snapshots, card transactions and points), meals and nutrition, health readings from Apple Health, and a ledger of everyday events — purchases, travel, meetings — mostly extracted from the owner's own email receipts and alerts.</p>
+
+  <h2>Where it lives</h2>
+  <p>In a Supabase project owned by the same person, behind row-level security, and in a Cloudflare Pages deployment of this site. The jobs that read email run on the owner's own computer; mailbox passwords stay in the macOS keychain and never leave it.</p>
+
+  <h2>Google user data</h2>
+  <p>Daybook's assistant can read, search, label, draft and send mail in the owner's own Gmail account, with the owner's explicit consent, using the <code>gmail.modify</code> and <code>gmail.settings.basic</code> scopes. Mail content is used only to answer the owner's questions and to carry out actions the owner asks for in that conversation. It is not sold, not shared with anyone, not used for advertising, and not used to train models. Google OAuth tokens are stored only on the owner's computer.</p>
+  <p>Daybook's use of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+  <h2>Third parties</h2>
+  <p>Supabase (database and sign-in), Cloudflare (hosting), the owner's bank-aggregation app and the model providers the assistant calls, each for the single purpose of making the app work. None of them is given Google user data.</p>
+
+  <h2>Deletion</h2>
+  <p>The owner can delete anything at any time from the app, the database or the Google account's third-party access page, and revoke Daybook's Gmail access at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</p>
+
+  <h2>Contact</h2>
+  <p>The developer and the only user are the same person: <a href="mailto:mailingadityavs@gmail.com">mailingadityavs@gmail.com</a>.</p>
+
+  <p class="muted"><a href="/">Back to Daybook</a></p>
+</main>
+</body>
+</html>
