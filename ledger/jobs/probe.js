@@ -53,12 +53,13 @@ export async function probe(options = {}) {
     const { messages, stats } = await connector.fetchNew(account, {}, {
       maxMessages: options.limit ?? 50,
       maxMessageBytes: config.limits.maxMessageBytes,
+      maxPdfMessageBytes: config.limits.maxPdfMessageBytes,
     });
 
     totals.seen += stats.seen;
     totals.bodies += stats.fetchedBodies;
     console.log(DIM(`  ${stats.seen} in window · ${stats.fetchedBodies} bodies read · ` +
-                    `${stats.skippedBySubject} skipped on subject · ${stats.skippedTooLarge} too large`));
+                    `${stats.skippedBySubject} skipped on subject · ${stats.skippedTooLarge} too large · ${stats.allowedPdf} over size for PDFs`));
 
     for (const message of messages) {
       if (message.parseError) {

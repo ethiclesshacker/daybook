@@ -79,6 +79,9 @@ export const config = {
     maxLlmCalls: int('LEDGER_LLM_MAX_CALLS', 25),
     // Skip anything larger than this — big mail is attachments, not receipts.
     maxMessageBytes: int('LEDGER_MAX_MESSAGE_BYTES', 512 * 1024),
+    // Except when the excess is attached PDFs: Zomato sends some receipts as
+    // three invoices and no body. The rest of the mail must still fit above.
+    maxPdfMessageBytes: int('LEDGER_MAX_PDF_MESSAGE_BYTES', 2 * 1024 * 1024),
     llmBatchSize: int('LEDGER_LLM_BATCH_SIZE', 5),
   },
 

@@ -44,6 +44,7 @@
     "chartjs-adapter-date-fns": "^3.0.0",
     "date-fns": "^4.4.0",
     "imapflow": "^1.0.194",
-    "mailparser": "^3.7.4"
+    "mailparser": "^3.7.4",
+    "unpdf": "1.8.1"
   }
 }
