@@ -22,6 +22,7 @@
 
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
+import { extractText, getDocumentProxy } from 'unpdf';
 import { htmlToText, triage } from '../../src/ledger/email.js';
 
 /**
@@ -45,6 +46,9 @@ import { htmlToText, triage } from '../../src/ledger/email.js';
 export async function fetchNew(account, cursor = {}, options = {}) {
   const maxMessages = options.maxMessages ?? 200;
   const maxBytes = options.maxMessageBytes ?? 512 * 1024;
+  // Mail over maxBytes is still read, up to this much, when what makes it big
+  // is attached PDFs — a receipt sent only as invoices. See pdfAllowance().
+  const maxPdfBytes = options.maxPdfMessageBytes ?? 2 * 1024 * 1024;
   const lookbackDays = options.lookbackDays ?? account.lookbackDays ?? 7;
   // A backfill deliberately ignores the checkpoint and rescans a date window.
   // Safe because ingestion is idempotent: everything already stored is matched
@@ -72,7 +76,7 @@ export async function fetchNew(account, cursor = {}, options = {}) {
   const messages = [];
   const nextCursor = { folders: { ...(cursor.folders || {}) } };
   const stats = {
-    seen: 0, skippedBySubject: 0, skippedTooLarge: 0, fetchedBodies: 0, notReached: 0,
+    seen: 0, skippedBySubject: 0, skippedTooLarge: 0, allowedPdf: 0, fetchedBodies: 0, notReached: 0,
     retried: 0, retryMissing: {}, parseErrors: 0, vanished: 0,
   };
 
@@ -140,6 +144,20 @@ export async function fetchNew(account, cursor = {}, options = {}) {
         const retrySet = new Set(retryUids);
         stats.seen += candidates.length;
 
+        // Oversized mail whose size might be attached PDFs: ask the server
+        // for its MIME structure (sizes only, no content) before deciding.
+        const pdfAllowed = new Set();
+        const oversized = candidates
+          .filter(c => c.size > maxBytes && c.size <= maxPdfBytes)
+          .map(c => c.uid);
+        if (oversized.length) {
+          for await (const msg of client.fetch(oversized, { uid: true, bodyStructure: true }, { uid: true })) {
+            if (pdfAllowance(msg.bodyStructure, msg.size ?? byUid.get(msg.uid)?.size, maxBytes, maxPdfBytes)) {
+              pdfAllowed.add(msg.uid);
+            }
+          }
+        }
+
         // Cheap pass: reject on subject and size before downloading anything.
         const wanted = [];
         for (const candidate of candidates) {
@@ -154,7 +172,7 @@ export async function fetchNew(account, cursor = {}, options = {}) {
             break;
           }
 
-          if (candidate.size && candidate.size > maxBytes) {
+          if (candidate.size && candidate.size > maxBytes && !pdfAllowed.has(candidate.uid)) {
             stats.skippedTooLarge++;
             wanted.push({ uid: candidate.uid, skip: true });
             continue;
@@ -178,6 +196,7 @@ export async function fetchNew(account, cursor = {}, options = {}) {
             continue;
           }
 
+          if (pdfAllowed.has(candidate.uid)) stats.allowedPdf++;
           wanted.push({ uid: candidate.uid, skip: false });
         }
 
@@ -241,6 +260,24 @@ export async function fetchNew(account, cursor = {}, options = {}) {
   return { messages, cursor: nextCursor, stats };
 }
 
+/**
+ * Whether a message over the size limit is big only because of attached PDFs.
+ * Everything that is not a PDF must still fit under `maxBytes`, and the whole
+ * message under `maxPdfBytes`: a 600 KB Zomato mail of three invoices is read,
+ * a 600 KB newsletter of images is not.
+ */
+export function pdfAllowance(structure, size, maxBytes, maxPdfBytes) {
+  if (!structure || !Number.isFinite(size) || size > maxPdfBytes) return false;
+  let pdfBytes = 0;
+  const walk = (node) => {
+    if (node.childNodes?.length) { node.childNodes.forEach(walk); return; }
+    const name = node.dispositionParameters?.filename || node.parameters?.name || '';
+    if (/^application\/pdf$/i.test(node.type || '') || /\.pdf$/i.test(name)) pdfBytes += Number(node.size) || 0;
+  };
+  walk(structure);
+  return pdfBytes > 0 && size - pdfBytes <= maxBytes;
+}
+
 function envelopeFrom(candidate) {
   const from = candidate.envelope?.from?.[0];
   return from ? { name: from.name || null, address: (from.address || '').toLowerCase() } : null;
@@ -270,7 +307,7 @@ export function parseFailureStub(envelopeMsg, account, folder, err) {
 }
 
 /** RFC822 → the shape every extractor in src/ledger/email.js expects. */
-async function toMessage(raw, account, folder) {
+export async function toMessage(raw, account, folder) {
   // skipHtmlToText keeps mailparser away from html-to-text, whose deepmerge-ts
   // dependency has a stack-exhaustion bug on recursive object graphs — a
   // crafted email could otherwise kill the job. We already have a plain-text
@@ -290,6 +327,25 @@ async function toMessage(raw, account, folder) {
     }
   }
 
+  const attachments = await Promise.all((mail.attachments || []).map(async a => {
+    const kind = `${a.contentType || ''} ${a.filename || ''}`;
+    return {
+      filename: a.filename || null,
+      contentType: a.contentType || null,
+      // Only calendar payloads are kept; everything else would be a copy of
+      // your mail sitting in memory for no reason.
+      content: /calendar|\.ics$/i.test(kind) ? a.content?.toString('utf8') : null,
+      // A PDF keeps its text, never its bytes.
+      ...(/\bapplication\/pdf\b|\.pdf$/i.test(kind) ? { text: await pdfText(a.content) } : {}),
+    };
+  }));
+
+  // Zomato sends some orders with an empty body and the receipt only in the
+  // attached PDFs. The PDF text stands in for the body only when there is no
+  // body: a receipt that already reads fine is left exactly as it was.
+  const body = mail.text || htmlToText(mail.html) || '';
+  const pdfBody = attachments.map(a => a.text).filter(Boolean).join('\n\n');
+
   return {
     messageId: mail.messageId || `${account.key}:${folder}:${raw.uid}`,
     accountKey: account.key,
@@ -300,18 +356,55 @@ async function toMessage(raw, account, folder) {
     from: from ? { name: from.name || null, address: (from.address || '').toLowerCase() } : null,
     to: (mail.to?.value || []).map(t => ({ name: t.name || null, address: (t.address || '').toLowerCase() })),
     headers,
-    text: mail.text || htmlToText(mail.html) || '',
+    text: body.trim() ? body : pdfBody || body,
     html: mail.html || '',
-    attachments: (mail.attachments || []).map(a => ({
-      filename: a.filename || null,
-      contentType: a.contentType || null,
-      // Only calendar payloads are kept; everything else would be a copy of
-      // your mail sitting in memory for no reason.
-      content: /calendar|\.ics$/i.test(`${a.contentType || ''} ${a.filename || ''}`)
-        ? a.content?.toString('utf8')
-        : null,
-    })),
+    attachments,
   };
+}
+
+const PDF_TEXT_MAX_CHARS = 20_000;
+const PDF_TIMEOUT_MS = 10_000;
+
+/**
+ * The text of a PDF attachment, or null. A malformed, encrypted or image-only
+ * PDF yields null rather than throwing: one bad invoice must not turn the
+ * whole message into a parse failure when its body may still be readable.
+ */
+export async function pdfText(content, { timeoutMs = PDF_TIMEOUT_MS } = {}) {
+  if (!content?.length) return null;
+  let doc = null;
+  let timer;
+  let work = null;
+  try {
+    work = (async () => {
+      // A copy: pdf.js takes ownership of the buffer it is given.
+      doc = await getDocumentProxy(new Uint8Array(content), {
+        isEvalSupported: false,
+        verbosity: 0,
+      });
+      const { text } = await extractText(doc, { mergePages: true });
+      return text;
+    })();
+    work.catch(() => {});
+    const text = await Promise.race([
+      work,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('pdf timeout')), timeoutMs); }),
+    ]);
+    const clean = String(text || '').replace(/[ \t]+/g, ' ').trim();
+    return clean ? clean.slice(0, PDF_TEXT_MAX_CHARS) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+    if (doc) {
+      try { await doc.destroy(); } catch { /* already gone */ }
+    } else {
+      // Timed out while pdf.js was still opening the file: the document does
+      // not exist yet, so destroy it when it does, or the worker stays alive
+      // for the rest of the job.
+      work?.finally(() => doc?.destroy()).catch(() => {});
+    }
+  }
 }
 
 export const connector = { id: 'imap', sourceType: 'email', fetchNew };

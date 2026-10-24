@@ -110,6 +110,7 @@ export async function ingestEmail(options = {}, deps = {}) {
                    : backfillDays ? Math.max(config.limits.maxMessages, 1000)
                    : config.limits.maxMessages,
         maxMessageBytes: config.limits.maxMessageBytes,
+        maxPdfMessageBytes: config.limits.maxPdfMessageBytes,
         ignoreCursor: Boolean(backfillDays),
         lookbackDays: backfillDays || undefined,
       });
