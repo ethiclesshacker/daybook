@@ -27,7 +27,7 @@ const DRAWER_QUERY = '(max-width: 900px)';
 
 // Private-mode Safari throws on localStorage, and a thrown preference must
 // not take the navigation down with it.
-const RAIL_KEY = 'finance-hub-sidebar-rail';
+const RAIL_KEY = 'daybook-sidebar-rail';
 
 function isRailCollapsed() {
   try { return localStorage.getItem(RAIL_KEY) === '1'; } catch (_) { return false; }
@@ -49,7 +49,7 @@ export function renderApp(session) {
       <button type="button" class="hamburger" id="hamburger-btn" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">
         <i class="fas fa-bars"></i>
       </button>
-      <span class="mobile-header-title">FinanceHub</span>
+      <span class="mobile-header-title">Daybook</span>
       <span class="mobile-header-spacer" aria-hidden="true"></span>
     </div>
 
@@ -71,7 +71,7 @@ export function renderApp(session) {
         <div class="sidebar-logo">
           <div class="sidebar-logo-icon" aria-hidden="true"><i class="fas fa-wallet"></i></div>
           <div class="sidebar-logo-names">
-            <div class="sidebar-logo-text">FinanceHub</div>
+            <div class="sidebar-logo-text">Daybook</div>
             <div class="sidebar-logo-sub">Personal finance</div>
           </div>
         </div>

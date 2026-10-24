@@ -30,7 +30,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const OFF_URL = 'https://world.openfoodfacts.org/cgi/search.pl';
 const FDC_URL = 'https://api.nal.usda.gov/fdc/v1/foods/search';
-const UA = 'finance-hub-ledger/1.0 (personal event ledger; local job)';
+const UA = 'daybook-ledger/1.0 (personal event ledger; local job)';
 
 const TIMEOUT_MS = 15000;
 // Both services rate-limit aggressively and neither is on a critical path, so

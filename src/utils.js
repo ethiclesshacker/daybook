@@ -655,7 +655,7 @@ export function cssVar(name, fallback = '#000000') {
 // as good as a fresh one. It is kept in localStorage for six hours: a reload
 // costs no request at all, and a dead API (or a slow one — there is a 4s
 // timeout now) can no longer hold a screen hostage.
-const FX_KEY = 'finance-hub-fx-eur-inr';
+const FX_KEY = 'daybook-fx-eur-inr';
 const FX_TTL_MS = 6 * 60 * 60 * 1000;
 const FX_TIMEOUT_MS = 4000;
 let fxInFlight = null;

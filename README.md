@@ -1,6 +1,6 @@
-# FinanceHub — Personal Finance Command Centre
+# Daybook — the record of your days
 
-FinanceHub is a single-page personal finance app: net worth snapshots, asset allocation, emergency runway, a full HSBC TravelOne points and redemptions ledger, and a **Personal Event Ledger** that records what actually happens in your life — backed by Supabase and deployed to Cloudflare Pages.
+A daybook is the book a day's entries go into before anything is posted anywhere else. This one is a single-page app that keeps yours: what you spent and what you are worth, what you ate, what your watch measured, and what happened — filled in mostly by itself from email, Apple Health and your bank, with a **Personal Event Ledger** underneath that never loses where a fact came from. Backed by Supabase, deployed to Cloudflare Pages, and read by an assistant over MCP.
 
 ---
 
@@ -178,7 +178,7 @@ variable, never from the file:
 
 ```bash
 # Gmail and Zoho both need an app-specific password, not your login password.
-security add-generic-password -s finance-hub-ledger -a you@gmail.com -w
+security add-generic-password -s daybook-ledger -a you@gmail.com -w
 ```
 
 Then look before you leap. `probe` connects, reads and extracts, but writes

@@ -1,5 +1,5 @@
 {
-  "name": "finance-hub",
+  "name": "daybook",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,8 +11,8 @@
     "lint": "eslint .",
     "typecheck": "tsc -p .",
     "check": "npm run lint && npm run typecheck && npm test && npm run build",
-    "deploy": "npm run check && wrangler pages deploy dist --project-name finance --branch main",
-    "deploy:preview": "npm run check && wrangler pages deploy dist --project-name finance --branch preview",
+    "deploy": "npm run check && wrangler pages deploy dist --project-name daybook --branch main",
+    "deploy:preview": "npm run check && wrangler pages deploy dist --project-name daybook --branch preview",
     "ledger:probe": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js probe",
     "ledger:ingest": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js ingest",
     "ledger:summarize": "node --env-file-if-exists=.env --env-file-if-exists=.env.ledger ledger/cli.js summarize",

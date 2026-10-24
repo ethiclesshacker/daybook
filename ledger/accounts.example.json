@@ -9,7 +9,7 @@
       "port": 993,
       "secure": true,
       "user": "you@yourdomain.com",
-      "keychain_service": "finance-hub-ledger",
+      "keychain_service": "daybook-ledger",
       "folders": ["INBOX"],
       "lookback_days": 7,
       "enabled": true

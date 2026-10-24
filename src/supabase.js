@@ -26,7 +26,7 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 //
 // export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { …same options… } });
 const BASE_URL = SUPABASE_URL.replace(/\/+$/, '');
-const CLIENT_INFO = { 'X-Client-Info': 'finance-hub (supabase auth-js + postgrest-js)' };
+const CLIENT_INFO = { 'X-Client-Info': 'daybook (supabase auth-js + postgrest-js)' };
 
 const auth = new AuthClient({
   url: `${BASE_URL}/auth/v1`,
@@ -34,7 +34,7 @@ const auth = new AuthClient({
   persistSession:    true,  // store session in localStorage → survives page reloads & browser restarts
   autoRefreshToken:  true,  // silently refresh the access token before it expires
   detectSessionInUrl: false, // sign-in is an email code typed into the page; nothing arrives in the URL
-  storageKey: 'finance-hub-session', // namespaced key so it doesn't clash with other Supabase apps
+  storageKey: 'daybook-session', // namespaced key so it doesn't clash with other Supabase apps
   flowType: 'implicit',     // supabase-js's default; OTP verification does not use it
 });
 

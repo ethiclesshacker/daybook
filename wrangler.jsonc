@@ -4,9 +4,9 @@
   // so VITE_* vars come from the local .env at build time, NOT from
   // Cloudflare's environment variables.
   //
-  //   npm run deploy          → production   (finance.aadityavs.dev)
+  //   npm run deploy          → production   (daybook.aadityavs.dev)
   //   npm run deploy:preview  → preview URL
-  "name": "finance",
+  "name": "daybook",
   "compatibility_date": "2026-08-16",
   "pages_build_output_dir": "dist"
 }
