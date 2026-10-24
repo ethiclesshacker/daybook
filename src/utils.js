@@ -167,7 +167,12 @@ const COLOR_TOKENS = {
 export const CHART_COLORS = Object.defineProperties({}, Object.fromEntries(
   Object.entries(COLOR_TOKENS).map(([key, get]) => [key, { get, enumerable: true }])));
 
-const ASSET_TONES = { stocks: 'accent', mutual_funds: 'purple', cash: 'success', epf: 'warning', gold: 'pink', fds: 'teal' };
+// One tone per class in ASSET_FIELDS (networth-math.js); the doughnut and the
+// stacked series read these by key.
+const ASSET_TONES = {
+  stocks: 'accent', etfs: 'orange', mutual_funds: 'purple', cash: 'success',
+  epf: 'warning', gold: 'pink', fds: 'teal', lent: 'muted',
+};
 export const ASSET_COLORS = Object.defineProperties({}, Object.fromEntries(
   Object.entries(ASSET_TONES).map(([key, tone]) => [key, { get: COLOR_TOKENS[tone], enumerable: true }])));
 
@@ -839,5 +844,5 @@ export function wireCombobox(id) {
 // ======================================================
 
 export {
-  computeAssets, computeLiquid, computeCashLike, computeEmergencyFund, computeNet,
+  computeAssets, computeLiquid, computeCashLike, computeEmergencyFund, computeInvestables, computeNet, ASSET_FIELDS,
 } from './networth-math.js';

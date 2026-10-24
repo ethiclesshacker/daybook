@@ -1144,9 +1144,10 @@ export const TOOLS = {
 
   get_net_worth: {
     readOnly: true,
-    description: 'Net worth from the snapshots he records: the latest figure with its asset breakdown (stocks, mutual funds, cash, '
-      + 'EPF, gold, FDs) and liabilities, the change since the previous snapshot, and recent history. In INR. Snapshots are '
-      + 'entered by hand every week or two, so always say the date of the latest one.',
+    description: 'Net worth from the snapshots he records: the latest figure with its asset breakdown (stocks, ETFs, mutual funds, '
+      + 'cash, EPF, physical metals under `gold`, FDs, and `lent` — money owed to him, loans and pending work reimbursements) and '
+      + 'liabilities, the change since the previous snapshot, and recent history. In INR. Snapshots are entered by hand every '
+      + 'week or two, so always say the date of the latest one. Reliance shares held for his father are deliberately not in it.',
     parameters: { type: 'object', properties: { history: { type: 'integer', default: 12, description: 'How many recent snapshots to include.' } } },
     handler: async args => rpc('finance_net_worth', { p_limit: args.history ?? 12, p_user_id: await resolveUserId() }),
   },

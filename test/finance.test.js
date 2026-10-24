@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  computeAssets, computeLiquid, computeCashLike, computeEmergencyFund, computeNet,
+  computeAssets, computeLiquid, computeCashLike, computeEmergencyFund, computeInvestables, computeNet,
 } from '../src/networth-math.js';
 
 import {
@@ -16,13 +16,25 @@ import {
 } from '../src/finance.js';
 
 const snap = (over = {}) => ({
-  date: '2026-01-01', stocks: 0, mutual_funds: 0, cash: 0,
-  epf: 0, gold: 0, fds: 0, credit_cards: 0, ...over,
+  date: '2026-01-01', stocks: 0, etfs: 0, mutual_funds: 0, cash: 0,
+  epf: 0, gold: 0, fds: 0, lent: 0, credit_cards: 0, ...over,
 });
 
 // ── net worth ────────────────────────────────────────────
 test('computeAssets sums every class', () => {
-  assert.equal(computeAssets(snap({ stocks: 1, mutual_funds: 2, cash: 3, epf: 4, gold: 5, fds: 6 })), 21);
+  assert.equal(computeAssets(snap({ stocks: 1, etfs: 7, mutual_funds: 2, cash: 3, epf: 4, gold: 5, fds: 6, lent: 8 })), 36);
+});
+
+test('a row from before 0026 (no etfs / lent columns) still adds up', () => {
+  assert.equal(computeAssets({ stocks: 10, cash: 5 }), 15);
+  assert.equal(computeLiquid({ stocks: 10, cash: 5 }), 15);
+});
+
+test('ETFs are liquid and investable; lent money is neither', () => {
+  const e = snap({ etfs: 100, lent: 50, cash: 1 });
+  assert.equal(computeLiquid(e), 101);
+  assert.equal(computeInvestables(e), 100);
+  assert.equal(computeAssets(e), 151);
 });
 
 test('compute* are null-safe', () => {

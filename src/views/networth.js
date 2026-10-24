@@ -6,7 +6,7 @@ import {
   formatINR, formatINRFull, formatPercent, formatDate, formatShortDate, todayISO, inrColumnFormatter,
   destroyChart, downloadCSV, escapeHTML,
   openModal, closeModal, showToast, parseNum, withBusy,
-  computeNet, computeAssets, computeLiquid, computeEmergencyFund, renderKpiCards,
+  computeNet, computeAssets, computeLiquid, computeEmergencyFund, computeInvestables, ASSET_FIELDS, renderKpiCards,
   numCell, rowActions,
 } from '../utils.js';
 import { netWorthSeriesChart, allocationDoughnut, wireChartToggle } from '../charts.js';
@@ -184,7 +184,7 @@ function renderKPIs() {
   const emergencyFund   = computeEmergencyFund(latest, settings.get('emergency_fund_basis'));
 
   const solvency = cur.liabilities > 0 ? (cur.assets / cur.liabilities) : null;
-  const passiveIncome = ((latest?.stocks || 0) + (latest?.mutual_funds || 0) + (latest?.fds || 0)) * passiveYield / 12;
+  const passiveIncome = computeInvestables(latest) * passiveYield / 12;
   const runway = monthlyExpenses > 0 ? emergencyFund / monthlyExpenses : 0;
   const fiPct = fiTarget > 0 ? (cur.net / fiTarget) * 100 : 0;
 
@@ -215,7 +215,7 @@ function renderKPIs() {
     {
       id: 'kpi-passive', label: 'Est. passive income', icon: 'fa-money-bill-wave', tone: 'purple', value: formatINR(passiveIncome), unit: '/mo', raw: passiveIncome.toFixed(0),
       sub: `At ${(passiveYield * 100).toFixed(0)}% annual yield on investables`,
-      tooltip: `(Stocks + MFs + FDs) × ${(passiveYield * 100).toFixed(0)}% ÷ 12. Blended estimated monthly passive income.`,
+      tooltip: `(Stocks + ETFs + MFs + FDs) × ${(passiveYield * 100).toFixed(0)}% ÷ 12. Blended estimated monthly passive income.`,
     },
     {
       id: 'kpi-runway', label: 'Emergency runway', icon: 'fa-shield-halved', tone: runway >= runwayTarget ? 'success' : 'warning',
@@ -257,13 +257,9 @@ function renderYearFilter() {
 }
 
 // ── Table ───────────────────────────────────────────────
+// One asset column per class, in ASSET_FIELDS order, then the totals.
 const MONEY_COLUMNS = {
-  stocks:       r => parseNum(r.e.stocks),
-  mutual_funds: r => parseNum(r.e.mutual_funds),
-  cash:         r => parseNum(r.e.cash),
-  epf:          r => parseNum(r.e.epf),
-  gold:         r => parseNum(r.e.gold),
-  fds:          r => parseNum(r.e.fds),
+  ...Object.fromEntries(ASSET_FIELDS.map(f => [f.key, r => parseNum(r.e[f.key])])),
   assets:       r => r.assets,
   credit_cards: r => parseNum(r.e.credit_cards),
   net:          r => r.net,
@@ -303,17 +299,13 @@ function renderTable() {
     id: 'net-worth',
     defaultSort: { key: 'date', dir: 'desc' },
     empty: 'No snapshots found. Add your first one!',
-    // Column names are the words the rest of the app uses. This one read
-    // "MFs" next to a Settings screen and an allocation chart that both
-    // say "Mutual Funds".
+    // Column names come from ASSET_FIELDS, the same words the form and the
+    // allocation chart use. This once read "MFs" next to a chart that said
+    // "Mutual Funds". A class nobody has filled in (Stocks, for now) hides
+    // itself: hideWhenEmpty.
     columns: [
       { key: 'date', label: 'Date', type: 'date', value: r => r.e.date, render: r => escapeHTML(formatDate(r.e.date)) },
-      money('stocks', 'Stocks'),
-      money('mutual_funds', 'Mutual Funds'),
-      money('cash', 'Cash'),
-      money('epf', 'EPF'),
-      money('gold', 'Gold'),
-      money('fds', 'FDs'),
+      ...ASSET_FIELDS.map(f => money(f.key, f.label)),
       money('assets', 'Total Assets'),
       money('credit_cards', 'Liabilities', { tone: 'danger' }),
       money('net', 'Net Worth', { tone: 'accent', bold: true }),
@@ -367,22 +359,27 @@ function openEntryForm(entry = null) {
         <i class="fas fa-arrow-up" aria-hidden="true"></i>Assets
       </div>
       <div class="form-row">
+        ${money('nw-f-etfs', 'ETFs (₹)', entry?.etfs)}
         ${money('nw-f-stocks', 'Stocks (₹)', entry?.stocks)}
+      </div>
+      <div class="form-row">
         ${money('nw-f-mf', 'Mutual Funds (₹)', entry?.mutual_funds)}
+        ${money('nw-f-fds', 'Fixed Deposits (₹)', entry?.fds)}
       </div>
       <div class="form-row">
         ${money('nw-f-cash', 'Cash & Bank (₹)', entry?.cash)}
         ${money('nw-f-epf', 'EPF (₹)', entry?.epf)}
       </div>
       <div class="form-row">
-        ${money('nw-f-gold', 'Gold (₹)', entry?.gold)}
-        ${money('nw-f-fds', 'Fixed Deposits (₹)', entry?.fds)}
+        ${money('nw-f-gold', 'Physical metals (₹)', entry?.gold)}
+        ${money('nw-f-lent', 'Lent & owed to you (₹)', entry?.lent)}
       </div>
 
       <div class="form-section is-danger">
         <i class="fas fa-arrow-down" aria-hidden="true"></i>Liabilities
       </div>
       ${money('nw-f-cc', 'Credit Cards Outstanding (₹)', entry?.credit_cards)}
+      <p class="form-hint">Enter the full card dues here and what people owe you under Lent — the net shows below, so neither needs adjusting by hand.</p>
 
       <!-- Live preview -->
       <div class="form-preview">
@@ -402,7 +399,7 @@ function openEntryForm(entry = null) {
   });
 
   // Live preview
-  const fields = ['nw-f-stocks','nw-f-mf','nw-f-cash','nw-f-epf','nw-f-gold','nw-f-fds','nw-f-cc'];
+  const fields = [...ASSET_FIELDS.map(f => FIELD_IDS[f.key]), 'nw-f-cc'];
   fields.forEach(id => {
     document.getElementById(id)?.addEventListener('input', updatePreview);
   });
@@ -411,17 +408,23 @@ function openEntryForm(entry = null) {
   document.getElementById('nw-form-submit').addEventListener('click', submitForm);
 }
 
-function updatePreview() {
-  const stocks = parseNum(document.getElementById('nw-f-stocks')?.value);
-  const mf     = parseNum(document.getElementById('nw-f-mf')?.value);
-  const cash   = parseNum(document.getElementById('nw-f-cash')?.value);
-  const epf    = parseNum(document.getElementById('nw-f-epf')?.value);
-  const gold   = parseNum(document.getElementById('nw-f-gold')?.value);
-  const fds    = parseNum(document.getElementById('nw-f-fds')?.value);
-  const cc     = parseNum(document.getElementById('nw-f-cc')?.value);
+// Form input id per asset class; the form, the preview and the save all read it.
+const FIELD_IDS = {
+  stocks: 'nw-f-stocks', etfs: 'nw-f-etfs', mutual_funds: 'nw-f-mf', cash: 'nw-f-cash',
+  epf: 'nw-f-epf', gold: 'nw-f-gold', fds: 'nw-f-fds', lent: 'nw-f-lent',
+};
 
-  const assets = stocks + mf + cash + epf + gold + fds;
-  const net = assets - cc;
+/** The snapshot as the form currently has it — the same shape as a table row. */
+function readForm() {
+  const entry = Object.fromEntries(ASSET_FIELDS.map(f => [f.key, parseNum(document.getElementById(FIELD_IDS[f.key])?.value)]));
+  entry.credit_cards = parseNum(document.getElementById('nw-f-cc')?.value);
+  return entry;
+}
+
+function updatePreview() {
+  const entry = readForm();
+  const assets = computeAssets(entry);
+  const net = computeNet(entry);
 
   const pa = document.getElementById('nw-preview-assets');
   const pn = document.getElementById('nw-preview-net');
@@ -437,15 +440,9 @@ async function submitForm() {
   const btn = document.getElementById('nw-form-submit');
   await withBusy(btn, 'Saving…', async () => {
     const payload = {
-      date:         document.getElementById('nw-f-date')?.value,
-      stocks:       parseNum(document.getElementById('nw-f-stocks')?.value),
-      mutual_funds: parseNum(document.getElementById('nw-f-mf')?.value),
-      cash:         parseNum(document.getElementById('nw-f-cash')?.value),
-      epf:          parseNum(document.getElementById('nw-f-epf')?.value),
-      gold:         parseNum(document.getElementById('nw-f-gold')?.value),
-      fds:          parseNum(document.getElementById('nw-f-fds')?.value),
-      credit_cards: parseNum(document.getElementById('nw-f-cc')?.value),
-      user_id:      await getCurrentUserId(),
+      date:    document.getElementById('nw-f-date')?.value,
+      ...readForm(),
+      user_id: await getCurrentUserId(),
     };
 
     if (!payload.date) { showToast('Please select a date.', 'error'); return; }
@@ -466,12 +463,10 @@ async function submitForm() {
 
 // ── Export ───────────────────────────────────────────────
 function exportCSV() {
-  const headers = ['Date','Stocks','Mutual Funds','Cash','EPF','Gold','FDs','Credit Cards','Total Assets','Net Worth'];
-  const rows = entries.map(e => {
-    const assets = computeAssets(e);
-    const net    = computeNet(e);
-    return [e.date, e.stocks||0, e.mutual_funds||0, e.cash||0, e.epf||0, e.gold||0, e.fds||0, e.credit_cards||0, assets, net];
-  });
+  const headers = ['Date', ...ASSET_FIELDS.map(f => f.label), 'Credit Cards', 'Total Assets', 'Net Worth'];
+  const rows = entries.map(e => [
+    e.date, ...ASSET_FIELDS.map(f => e[f.key] || 0), e.credit_cards || 0, computeAssets(e), computeNet(e),
+  ]);
   downloadCSV(headers, rows, `net_worth_export_${todayISO()}.csv`);
   showToast('CSV exported!');
 }
