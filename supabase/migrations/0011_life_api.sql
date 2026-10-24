@@ -56,6 +56,7 @@
 -- ────────────────────────────────────────────────────────────
 
 -- The arithmetic is src/networth-math.js, restated. Change one, change both.
+-- Replaced by 0026 (adds the etfs and lent classes); kept here as it was.
 create or replace function public.finance_net_worth(p_limit integer default 12, p_user_id uuid default null)
 returns jsonb language plpgsql stable
 set search_path = public, pg_temp as $$

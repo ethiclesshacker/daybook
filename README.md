@@ -123,6 +123,7 @@ Run the migrations in `supabase/migrations/` in order, via the Supabase SQL edit
 - `0008_food_merge.sql` — `food_merge_items`: fold one dish spelling into another, rewriting past meals so the ranking and the calories stop counting it twice. Driven from `/#dishes`.
 - `0009`–`0017` — Apple Health (`docs/health-sync.md`), the life API, card points from the ledger (`docs/card-points.md`), entity aliases, the review queue and money flow. Several replace functions defined earlier; each earlier file now says which.
 - `0018_cleanup.sql` — the ownership guard that actually guards (the old one passed every caller inside `SECURITY DEFINER`, and passed anon by returning NULL), anon revoked from the card tables and food functions, dead objects dropped, the snippet purge extended to close stuck runs, and bank spellings of merchants folded into the receipt's entity.
+- `0026_etfs_and_lent.sql` — two more snapshot columns: `etfs` (split out of `stocks`, which had carried the gold, silver and Nifty ETFs since the first snapshot, backfilled from the demat trade log) and `lent` (money owed to you: loans and pending reimbursements, an asset that is not liquid). `gold` is physical metals and is now labelled so. Replaces `finance_net_worth`.
 
 There is no migration history in the project; apply a file with `npx supabase@2 db query --linked --project-ref <ref> -f supabase/migrations/<file>.sql`, then `-f supabase/checks/rls_audit.sql`.
 

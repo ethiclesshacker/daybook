@@ -12,7 +12,7 @@
 import { Chart, CHART_FONT_SIZE } from './chart-setup.js';
 import {
   formatINR, formatINRFull, inrAxisTick, cssVar, destroyChart, CHART_COLORS, ASSET_COLORS,
-  computeNet, computeAssets,
+  computeNet, computeAssets, ASSET_FIELDS,
 } from './utils.js';
 
 /** '#38bdf8' + 0.2 → 'rgba(56,189,248,0.2)'. Chart.js paints to canvas, where a CSS token never resolves. */
@@ -151,15 +151,6 @@ export function netWorthSeriesChart(canvas, entries, type = 'line', { withAssets
     },
   });
 }
-
-const ASSET_FIELDS = [
-  { key: 'stocks',       label: 'Stocks' },
-  { key: 'mutual_funds', label: 'Mutual Funds' },
-  { key: 'cash',         label: 'Cash' },
-  { key: 'epf',          label: 'EPF' },
-  { key: 'gold',         label: 'Gold' },
-  { key: 'fds',          label: 'FDs' },
-];
 
 /** Asset allocation of one snapshot as a doughnut. Null when there is no snapshot. */
 export function allocationDoughnut(canvas, latest) {
