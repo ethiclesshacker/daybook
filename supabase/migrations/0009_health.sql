@@ -11,7 +11,7 @@
 --
 --   1. Nothing here touches `public` grants. The upstream migrations revoke
 --      every privilege on schema public from `anon` and `authenticated`, which
---      would take the FinanceHub web app down. This file creates its own
+--      would take the Daybook web app down. This file creates its own
 --      schema, grants only inside it, and adds a single function to `public`.
 --   2. No open provisioning. There is no endpoint that mints a token. A token
 --      is minted once, by hand, in the SQL editor (see the bottom of this

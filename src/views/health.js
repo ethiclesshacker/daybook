@@ -25,7 +25,7 @@ import { destroyCharts, withAlpha } from '../charts.js';
 import { fillSeries } from '../series.js';
 
 const RANGES = [7, 30, 90];
-const RANGE_KEY = 'finance-hub-health-range';
+const RANGE_KEY = 'daybook-health-range';
 
 // Validated as an ordinal ramp against --bg-card (single hue, monotone
 // lightness, darkest step 3.98:1 on the surface). Built around --purple.

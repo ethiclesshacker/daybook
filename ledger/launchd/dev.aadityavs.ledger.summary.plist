@@ -26,7 +26,7 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>cd /Users/aadityavs/projects/finance-hub &amp;&amp; npm run ledger:summarize -- --period day --days 7 &amp;&amp; npm run ledger:purge</string>
+    <string>cd /Users/aadityavs/projects/daybook &amp;&amp; npm run ledger:summarize -- --period day --days 7 &amp;&amp; npm run ledger:purge</string>
   </array>
 
   <key>StartCalendarInterval</key>
