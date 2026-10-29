@@ -18,6 +18,20 @@
 import { normalizeName } from './normalize.js';
 import { startOfWeek } from './dates.js';
 
+/** Receipts describe purchases. Grocery purchases never count as meals. */
+export function isMeal(event) {
+  return event?.status !== 'dismissed' && event?.subtype !== 'groceries' && event?.data?.not_eaten !== true;
+}
+
+/** A correction to intake leaves the original receipt basket and date intact. */
+export function eatenItems(event) {
+  return event?.data?.eaten_items ?? event?.data?.items ?? [];
+}
+
+export function eatenAt(event) {
+  return event?.data?.eaten_at || event?.occurred_at;
+}
+
 /** Dictionary rows → a Map keyed the way the line items will be looked up. */
 export function indexDictionary(rows = []) {
   const map = new Map();
@@ -39,7 +53,7 @@ export function indexDictionary(rows = []) {
  *               here would quietly drag every average down.
  */
 export function eventNutrition(event, dict) {
-  const items = event?.data?.items || [];
+  const items = isMeal(event) ? eatenItems(event) : [];
   if (!items.length) return { kcal: null, protein: null, carbs: null, fat: null, basis: 'none', total: 0, resolved: 0, missing: 0 };
 
   let kcal = 0, protein = 0, carbs = 0, fat = 0, resolved = 0;
@@ -51,7 +65,8 @@ export function eventNutrition(event, dict) {
     // it came from the person or the menu, about this exact serving. Zero is a
     // legitimate statement (a Coke Zero), so the test is "is a number", never
     // truthiness. Macros still come from the dictionary when it knows the dish.
-    const stated = Number(item?.kcal ?? item?.calories);
+    const rawStated = item?.kcal ?? item?.calories;
+    const stated = rawStated == null ? NaN : Number(rawStated);
     const row = dict.get(normalizeName(item?.name));
     const hasRow = row && row.kcal !== null && row.kcal !== undefined;
 
@@ -97,6 +112,7 @@ export function summarise(events, dict, { dateOf, nutritionOf = event => eventNu
   let kcal = 0, protein = 0;
 
   for (const event of events) {
+    if (!isMeal(event)) continue;
     const n = nutritionOf(event);
     if (n.basis === 'none') { unknown++; continue; }
     if (n.basis === 'partial') partial++;
@@ -104,7 +120,7 @@ export function summarise(events, dict, { dateOf, nutritionOf = event => eventNu
     kcal += n.kcal;
     protein += n.protein;
 
-    const day = dateOf(event.occurred_at);
+    const day = dateOf(eatenAt(event));
     const row = days.get(day) || { day, kcal: 0, protein: 0, meals: 0 };
     row.kcal += n.kcal; row.protein += n.protein; row.meals++;
     days.set(day, row);

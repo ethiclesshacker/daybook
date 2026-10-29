@@ -45,6 +45,22 @@ function searchEventsUncached({
   });
 }
 
+/** Complete food history, including purchases that can be logged as meals later. */
+export function foodEvents() {
+  return read('food-events', async () => {
+    const events = [];
+    let offset = 0;
+    for (;;) {
+      const page = await searchEventsUncached({ types: ['food'], limit: 1000, offset });
+      const rows = page?.events || [];
+      events.push(...rows);
+      offset += rows.length;
+      if (!rows.length || offset >= (page?.total ?? offset)) break;
+    }
+    return events;
+  });
+}
+
 export const getEvent            = id            => rpc('ledger_get_event', { p_event_id: id });
 export const dismissEvent        = write((id, reason)  => rpc('ledger_dismiss_event', { p_event_id: id, p_reason: reason ?? null }));
 export const deleteEvent         = write((id, purge)   => rpc('ledger_delete_event', { p_event_id: id, p_purge_sources: Boolean(purge) }));
@@ -178,3 +194,12 @@ async function recentRunsUncached(limit) {
     .limit(limit));
   return data || [];
 }
+
+/** Restore a mistaken review only if nobody has changed the event since. */
+export const restoreReview = write((id, updatedAt, status, inference) => rpc('ledger_restore_review', {
+  p_event_id: id, p_expected_updated_at: updatedAt, p_status: status, p_inference: inference,
+}));
+
+export const reviewEvent = write((id, status, updatedAt) => rpc('ledger_review_event', {
+  p_event_id: id, p_status: status, p_expected_updated_at: updatedAt,
+}));

@@ -4259,3 +4259,27 @@ button.user-profile:focus-visible { outline: 2px solid var(--accent); outline-of
   .dash-stats.dash-stats--row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dash-top .dash-nw-stat { margin-left: 0; }
 }
+
+/* Daily actions stay compact; record maintenance belongs next to the numbers. */
+.daily-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); margin: var(--sp-3) 0; }
+.daily-actions > span { color: var(--text-secondary); margin-right: var(--sp-2); font-size: 0.85rem; }
+.dash-stat.is-stale { opacity: 0.65; }
+.life-category-note, .fd-purchase-note { display: block; color: var(--text-muted); font-size: 0.75rem; }
+.review-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
+.review-actions .btn-sm { min-height: 36px; }
+.toast-action { margin-left: var(--sp-3); border: 0; background: transparent; color: inherit; text-decoration: underline; cursor: pointer; padding: 0.5rem; font: inherit; }
+.fd-card-open { text-align: left; color: inherit; background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
+.fd-card-open:hover { color: var(--accent); }
+.fd-card-foot { flex-wrap: wrap; }
+.fd-library-link { color: var(--accent); font: inherit; font-size: 0.75rem; border: 0; background: none; padding: 0.5rem 0; text-align: left; cursor: pointer; }
+.snapshot-start { padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: var(--sp-4); }
+.snapshot-start p { color: var(--text-secondary); margin-bottom: var(--sp-2); }
+#weight-value { margin-bottom: var(--sp-4); }
+@media (max-width: 640px) {
+  .daily-actions { align-items: stretch; }
+  .daily-actions > span { flex-basis: 100%; }
+  .daily-actions button { flex: 1 1 auto; min-height: 44px; }
+  .review-actions .btn-sm { min-height: 44px; }
+}
+.fb-stepper .fb-qty { width: 4.5rem; min-width: 0; padding: 0.35rem; text-align: center; }
+.dash-stat-sub { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.4; }

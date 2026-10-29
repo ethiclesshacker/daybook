@@ -67,6 +67,12 @@ export async function renderDashboard(container) {
         </div>
       </header>
 
+      <nav class="daily-actions" aria-label="Complete today’s record">
+        <span>Today’s record</span>
+        <button type="button" class="btn-sm btn-ghost" data-goto="ledger?action=weight">Log weight</button>
+        <button type="button" class="btn-sm btn-ghost" data-goto="food?action=add">Add a meal</button>
+        <button type="button" class="btn-sm btn-ghost" data-goto="ledger?tab=review">Review uncertain entries</button>
+      </nav>
       <div id="dash-alert"></div>
 
       <!-- Two columns that size on their own: money on the left (this month,
@@ -215,7 +221,7 @@ async function loadDashboardData() {
       // The RPC answers { total, events }; an array was the pre-0004 shape.
       const n = Array.isArray(rows) ? rows.length : Number(rows?.total ?? rows?.events?.length ?? 0);
       if (n) todo.add('review', {
-        icon: 'fa-inbox', goto: 'ledger',
+        icon: 'fa-inbox', goto: 'ledger?tab=review',
         text: `${n} to review`,
         title: `${n} ledger event${n === 1 ? '' : 's'} the model read but nobody has confirmed`,
       });
@@ -299,7 +305,7 @@ async function loadDashboardData() {
   // and what the card has earned. FI progress left with the FI screen.
   const monthlyExp    = settings.get('monthly_expenses');
   const runwayTarget  = settings.get('emergency_runway_target');
-  const basis         = settings.get('emergency_fund_basis');
+  const basis = settings.get('emergency_fund_basis');
   const emergencyFund = computeEmergencyFund(latest, basis);
   const runway        = monthlyExp > 0 ? emergencyFund / monthlyExp : 0;
   const runwayOK      = runway >= runwayTarget;
@@ -318,11 +324,11 @@ async function loadDashboardData() {
         title: 'Net worth growth ÷ income over the last 12 months. Includes market moves.',
       },
       {
-        label: 'Runway',
+        label: basis === 'cash_like' ? 'Cash runway' : 'Accessible runway',
         value: `${runway.toFixed(1)} mo`,
-        sub: `target ${runwayTarget} mo`,
-        tone: runwayOK ? 'success' : 'warning',
-        title: `${basis === 'cash_like' ? 'Cash and FDs' : 'Cash, stocks and funds'} ÷ ${formatINRFull(monthlyExp)} a month`,
+        sub: basis === 'cash_like' ? `target ${runwayTarget} mo` : 'Includes market risk',
+        tone: basis === 'cash_like' && runwayOK ? 'success' : 'warning',
+        title: `${basis === 'cash_like' ? 'Cash and FDs' : 'Cash and market holdings'} ÷ ${formatINRFull(monthlyExp)} a month`,
       },
       {
         label: 'Points value',
@@ -355,7 +361,7 @@ function buildNetWorthChart(entries, type = 'line') {
 function renderStats(el, items) {
   if (!el) return;
   el.innerHTML = items.map(item => `
-    <div class="dash-stat"${item.title ? ` title="${escapeHTML(item.title)}"` : ''}>
+    <div class="dash-stat ${item.stale ? 'is-stale' : ''}"${item.title ? ` title="${escapeHTML(item.title)}"` : ''}>
       <div class="dash-stat-label">${escapeHTML(item.label)}</div>
       <div class="dash-stat-value mono ${item.tone ? `is-${item.tone}` : ''}">${escapeHTML(item.value)}</div>
       <div class="dash-stat-sub">${escapeHTML(item.sub)}</div>
@@ -455,14 +461,14 @@ function renderToday(days, today, lastSyncAt) {
       const when = new Date(lastSyncAt);
       const sameDay = todayISO() === localISODate(when);
       const clock = when.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
-      asOf.textContent = `as of ${sameDay ? clock : `${formatShortDate(localISODate(when))} ${clock}`}`;
+      asOf.textContent = `Watch synced ${sameDay ? clock : `${formatShortDate(localISODate(when))} ${clock}`}`;
       asOf.title = `Apple Health last synced ${when.toLocaleString('en-IN')}`;
       asOf.classList.toggle('is-stale', stale);
     } else {
       asOf.textContent = '';
     }
   }
-  el.classList.toggle('is-stale', stale);
+  el.classList.remove('is-stale');
 
   // life_days nests body fields; the Health helpers read them flat.
   const flat = days.map(d => ({ day: d.day, ...(d.body || {}) }));
@@ -493,21 +499,23 @@ function renderToday(days, today, lastSyncAt) {
   renderStats(el, [
     {
       label: 'Sleep',
+      stale,
       value: lastNight ? formatHours(lastNight.value) : '—',
       sub: lastNight
         ? `${lastNight.day === today ? 'last night' : 'night before'}${sleepAvg != null ? ` · avg ${formatHours(sleepAvg)}` : ''}`
-        : 'No night synced yet',
+        : 'No recent night · sync HealthSync on iPhone',
     },
     {
       label: 'Steps',
+      stale,
       value: steps != null ? num(steps) : '—',
-      sub: stepsAvg != null ? `so far · avg ${num(stepsAvg)}` : 'so far today',
+      sub: steps == null ? 'No reading today · sync HealthSync on iPhone' : `today so far${stepsAvg != null ? ` · avg ${num(stepsAvg)}` : ''}`,
     },
     {
       label: 'Eaten',
       value: food?.eaten_kcal != null ? `${num(food.eaten_kcal)} kcal` : '—',
       sub: [
-        target ? `of ${num(target)}` : null,
+        target ? `recorded today · target ${num(target)}` : 'recorded today',
         food?.protein_g != null ? `${food.protein_g} g protein` : null,
       ].filter(Boolean).join(' · ') || 'Nothing logged yet',
     },
@@ -580,7 +588,7 @@ function renderMonth(days, stats, today) {
         </div>
         <div class="life-spend-note ${toneClass}">${escapeHTML(status.note)}</div>
       </div>
-      <div class="life-cats">
+      <div class="life-cats"><span class="life-category-note">Recorded categories · includes work</span>
         ${categories.length ? categories.map(([key, value]) => `
           <div class="life-cat">
             <span class="life-cat-label">${escapeHTML(categoryMeta(key).label)}</span>

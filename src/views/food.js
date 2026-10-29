@@ -18,7 +18,7 @@ import * as api from '../ledger/api.js';
 import { mealMeta, mealSlot, sourceMeta } from '../ledger/taxonomy.js';
 import { summariseItems, mealTitle, retitleForItems } from '../ledger/items.js';
 import {
-  indexDictionary, eventNutrition, summarise, bucketDays, dishNutrition, SOURCE_LABEL,
+  indexDictionary, eventNutrition, summarise, bucketDays, dishNutrition, SOURCE_LABEL, isMeal, eatenItems, eatenAt,
 } from '../ledger/nutrition.js';
 import { localDateISO, entityRef, amountInr } from '../ledger/normalize.js';
 import { formatTime as fmtTime, formatDayHeading as fmtDayHeading, toLocalInput, shiftISO as shiftDay } from '../ledger/dates.js';
@@ -30,6 +30,7 @@ import {
 } from '../utils.js';
 import { verticalGradient, GRID_LINE, withAlpha } from '../charts.js';
 import { fillSeries } from '../series.js';
+import { navigateTo, routeParams } from '../router.js';
 import { openEventDetail } from './ledger.js';
 
 let events = [];            // every food event, all time — the period is a filter
@@ -62,10 +63,7 @@ const rupeeSpend = event => (isInflow(event) ? 0 : amountInr(event) || 0);
 
 
 export async function renderFood(container) {
-  activeTab = 'meals';
-  period = { preset: '30', from: null, to: null };
-  query = '';
-  onlyEmpty = false;
+  // Keep the current period and search when returning from the nutrition library.
   // The router calls unmount() before this; a second destroy is a no-op and
   // covers a render that did not come through the router.
   calorieChartRef = destroyChart(calorieChartRef);
@@ -74,7 +72,7 @@ export async function renderFood(container) {
     <div class="page-header lg-header fd-header">
       <div class="page-header-left">
         <h2>Food</h2>
-        <p>What you ate, off the receipts — measured against <span id="fd-target-text">${escapeHTML(String(kcalTarget().toLocaleString('en-IN')))}</span> kcal a day</p>
+        <p>Recorded intake — measured against <span id="fd-target-text">${escapeHTML(String(kcalTarget().toLocaleString('en-IN')))}</span> kcal a day</p><p class="form-hint">Delivery portions are assumed eaten until corrected. Grocery purchases count only when logged as a meal.</p>
       </div>
       <div class="lg-header-actions fd-period-wrap">
         <div class="chart-toggle" role="group" aria-label="Period">
@@ -123,7 +121,7 @@ export async function renderFood(container) {
                 <i class="fas fa-utensils" aria-hidden="true"></i>Meals
               </button>
               <button type="button" class="table-tab" id="fd-tab-dishes" role="tab" aria-selected="false">
-                <i class="fas fa-ranking-star" aria-hidden="true"></i>Dishes
+                <i class="fas fa-ranking-star" aria-hidden="true"></i>Most eaten
               </button>
             </div>
             <div class="lg-controls">
@@ -206,7 +204,18 @@ export async function renderFood(container) {
     searchDebounce = setTimeout(paint, 180);
   });
 
+  document.getElementById('fd-search').value = query;
+  customBox.hidden = period.preset !== 'custom';
+  document.getElementById('fd-from').value = period.from || '';
+  document.getElementById('fd-to').value = period.to || '';
+  document.querySelectorAll('[data-preset]').forEach(b => b.classList.toggle('active', b.dataset.preset === period.preset));
+  document.getElementById('fd-gaps').setAttribute('aria-pressed', String(onlyEmpty));
   await loadData();
+  switchTab(activeTab);
+  if (routeParams().get('action') === 'add' && container.isConnected && document.getElementById('fd-fab')) {
+    history.replaceState(null, '', '#food');
+    openBasket(null);
+  }
 }
 
 export { renderFood as render };
@@ -243,7 +252,7 @@ async function loadData() {
     const [result, rows] = await Promise.all([
       // The same request, with the same arguments, as the Dishes page — so the
       // session cache (src/cache.js) answers whichever of the two opens second.
-      api.searchEvents({ types: ['food'], limit: 1000 }),
+      api.foodEvents(),
       api.foodDictionary().catch(() => []),
       settings.ready(),
     ]);
@@ -252,7 +261,7 @@ async function loadData() {
     if (targetText) targetText.textContent = kcalTarget().toLocaleString('en-IN');
     // A dismissed event is one you said did not happen. It stays in the
     // ledger so ingestion cannot recreate it, but it was never eaten.
-    events = (result?.events || []).filter(e => e.status !== 'dismissed');
+    events = (result || []).filter(e => e.status !== 'dismissed');
     dict = indexDictionary(rows);
     paint();
   } catch (err) {
@@ -291,14 +300,14 @@ function inPeriod() {
   // Compared as local dates, not instants, so "7D" means seven calendar days
   // on the user's clock — a meal at 00:30 belongs to the day it says.
   const list = events.filter(e => {
-    const d = localDateISO(e.occurred_at, zone);
+    const d = localDateISO(eatenAt(e), zone);
     return d >= from && d <= to;
   });
   if (!query) return list;
   return list.filter(event => {
     const haystack = [
       event.title, event.data?.restaurant, event.data?.merchant, event.data?.ordered_via,
-      ...(event.data?.items || []).map(i => `${i.name} ${i.options || ''}`),
+      ...(eatenItems(event)).map(i => `${i.name} ${i.options || ''}`),
     ].filter(Boolean).join(' ').toLowerCase();
     return haystack.includes(query);
   });
@@ -311,7 +320,7 @@ function visible() {
 }
 
 /** A meal nobody has said anything about yet. */
-const isEmptyBasket = event => !(event.data?.items || []).length;
+const isEmptyBasket = event => isMeal(event) && !eatenItems(event).length;
 
 function paint() {
   renderKPIs();
@@ -323,7 +332,7 @@ function paint() {
   const list = visible();
   if (!list.length) { body.innerHTML = listEmptyState(); return; }
 
-  body.innerHTML = activeTab === 'dishes' ? renderDishes(list) : renderMeals(list);
+  body.innerHTML = activeTab === 'dishes' ? renderDishes(list.filter(isMeal)) : renderMeals(list);
 
   // The row's job on this page is "what did I eat", so that is what clicking it
   // does. Provenance — which mail this came from, what else corroborates it —
@@ -347,6 +356,12 @@ function paint() {
     });
   });
 
+  body.querySelectorAll('[data-library]').forEach(link => {
+    const open = e => { e.stopPropagation(); navigateTo('dishes?query=' + encodeURIComponent(link.dataset.library)); };
+    link.addEventListener('click', open);
+    link.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); open(e); } });
+  });
+
   body.querySelectorAll('[data-dish]').forEach(row => {
     row.addEventListener('click', () => {
       const input = document.getElementById('fd-search');
@@ -362,8 +377,8 @@ function paint() {
 function renderMeals(list) {
   const zone = timeZone();
   const byDay = new Map();
-  for (const event of list) {
-    const day = localDateISO(event.occurred_at, zone);
+  for (const event of [...list].sort((a, b) => String(eatenAt(b)).localeCompare(String(eatenAt(a))))) {
+    const day = localDateISO(eatenAt(event), zone);
     if (!byDay.has(day)) byDay.set(day, []);
     byDay.get(day).push(event);
   }
@@ -376,18 +391,17 @@ function renderMeals(list) {
   return `<div class="timeline">${[...byDay.entries()].map(([day, dayEvents]) => {
     const heading = day === today ? 'Today' : day === yesterday ? 'Yesterday' : formatDayHeading(day);
     const spend = dayEvents.reduce((sum, e) => sum + rupeeSpend(e), 0);
-    const meals = dayEvents.filter(e => e.subtype !== 'groceries').length;
+    const meals = dayEvents.filter(e => isMeal(e)).length;
     // The same thread as the chart: a day that crossed the target carries a red
     // tick here too, so scrolling the list tells the same story as the curve.
-    const dayKcal = dict.size
-      ? dayEvents.reduce((sum, e) => sum + (eventNutrition(e, dict).kcal || 0), 0) : 0;
+    const dayKcal = dayEvents.reduce((sum, e) => sum + (eventNutrition(e, dict).kcal || 0), 0);
     const overTarget = dayKcal > target;
 
     // Strictly by the clock, earliest first. The meal is a label the row
     // carries, not a section it sits in — grouping by meal meant a 01:00 snack
     // sorted between lunch and dinner, because its position came from which
     // band it belonged to rather than from when it happened.
-    const inOrder = [...dayEvents].sort((a, b) => new Date(a.occurred_at) - new Date(b.occurred_at));
+    const inOrder = [...dayEvents].sort((a, b) => new Date(eatenAt(a)) - new Date(eatenAt(b)));
 
     return `
       <section class="tl-day" aria-label="${escapeHTML(heading)}">
@@ -402,13 +416,13 @@ function renderMeals(list) {
             </span>
           </div>
         </header>
-        ${inOrder.map(event => renderMealRow(event, mealMeta(mealSlot(event.occurred_at, zone, event.subtype) || 'snack'))).join('')}
+        ${inOrder.map(event => renderMealRow(event, mealMeta(mealSlot(eatenAt(event), zone, event.subtype) || 'snack'))).join('')}
       </section>`;
   }).join('')}</div>`;
 }
 
 function renderMealRow(event, meta) {
-  const items = event.data?.items || [];
+  const items = eatenItems(event);
   const nut = eventNutrition(event, dict);
   const amount = Number(event.data?.amount);
   const source = sourceMeta(event.source_type);
@@ -423,14 +437,14 @@ function renderMealRow(event, meta) {
   // quantities to show, and most receipts state no per-item price — a column
   // rendered for them anyway is either an empty indent before every dish or,
   // once the empty cells collapse, a grid the next dish slides sideways into.
-  const anyQty = items.some(item => (item.qty || 1) > 1);
+  const anyQty = items.some(item => (item.qty ?? 1) !== 1);
   const anyPrice = items.some(item => Number.isFinite(Number(item.amount)));
 
   return `
     <article class="tl-item fd-meal" data-basket="${escapeHTML(event.id)}" role="button" tabindex="0"
-             aria-label="Edit what you ate: ${escapeHTML(label)}">
+             aria-label="${event.subtype === 'groceries' ? 'Log a portion from this purchase' : 'Edit what you ate'}: ${escapeHTML(label)}">
       <div class="tl-when">
-        <span class="tl-time mono">${escapeHTML(formatTime(event.occurred_at))}</span>
+        <span class="tl-time mono">${escapeHTML(formatTime(eatenAt(event)))}</span>
         <button type="button" class="tl-src fd-src" data-detail="${escapeHTML(event.id)}"
                 title="Where this came from${event.source_count > 1 ? ` · ${event.source_count} sources agree` : ''}"
                 aria-label="Where this came from">
@@ -445,7 +459,7 @@ function renderMealRow(event, meta) {
           <ul class="fd-items ${anyQty ? 'has-qty' : ''} ${anyPrice ? 'has-amt' : ''}">
             ${items.map(item => `
               <li>
-                ${anyQty ? `<span class="fd-qty mono">${item.qty > 1 ? `${item.qty}×` : ''}</span>` : ''}
+                ${anyQty ? `<span class="fd-qty mono">${item.qty !== undefined && item.qty !== 1 ? `${item.qty}×` : ''}</span>` : ''}
                 <span class="fd-item-name">${escapeHTML(item.name)}${
                   item.options ? `<span class="fd-item-opts"> ${escapeHTML(item.options)}</span>` : ''}</span>
                 ${anyPrice ? `<span class="fd-item-amt mono">${Number.isFinite(Number(item.amount))
@@ -461,7 +475,7 @@ function renderMealRow(event, meta) {
              ${event.subtype === 'restaurant' ? 'Paid at the table — add what you had' : 'Add what you had'}
            </div>`}
         <div class="tl-meta">
-          <span class="fd-tag" style="color:${meta.color}">${escapeHTML(meta.label)}</span>
+          <span class="fd-tag" style="color:${meta.color}">${escapeHTML(meta.label)}</span>${!isMeal(event) ? `<span class="fd-purchase-note">Purchased · not counted as eaten. ${event.subtype === 'groceries' ? 'Click to log a portion.' : 'Click to update intake.'}</span>` : ''}
           ${place ? `<span>${escapeHTML(place)}</span>` : ''}
           ${nut.basis === 'partial' ? `<span class="fd-partial" title="${nut.missing} of ${
             nut.total} items have no nutrition yet, so this total is short">+${nut.missing} unpriced</span>` : ''}
@@ -512,11 +526,13 @@ function placeCatalogue() {
 
 function openBasket(event) {
   // A copy: nothing is written until Save, so Cancel is a real cancel.
-  draft = (event?.data?.items || []).map(item => ({ ...item }));
+  draft = (event ? eatenItems(event) : []).map(item => ({ ...item }));
+  if (event?.subtype === 'groceries') draft = draft.map(({ amount: _a, ...item }) => item);
 
-  const isNew = !event;
+  const purchase = event?.subtype === 'groceries' ? event : null;
+  const isNew = !event || Boolean(purchase);
   const zone = timeZone();
-  const when = event?.occurred_at || new Date().toISOString();
+  const when = purchase ? new Date().toISOString() : (event ? eatenAt(event) : new Date().toISOString());
   const where = event ? (event.data?.restaurant || event.data?.merchant || event.title) : null;
   const meal = mealMeta(mealSlot(when, zone, event?.subtype) || 'snack');
 
@@ -524,13 +540,10 @@ function openBasket(event) {
     title: isNew ? 'What did you eat?' : 'What did you have?',
     icon: meal.icon, iconColor: meal.color,
     body: `
+      ${purchase ? '<p class="form-hint">Log only what you ate. The grocery receipt stays unchanged and is not counted as intake.</p>' : ''}
+      <div class="form-group"><label class="form-label" for="fb-when">When you ate</label><input type="datetime-local" class="form-input" id="fb-when" value="${escapeHTML(toLocalInput(when))}" /></div>
       ${isNew ? `
         <div class="form-row">
-          <div class="form-group">
-            <label class="form-label" for="fb-when">When</label>
-            <input type="datetime-local" class="form-input" id="fb-when" value="${escapeHTML(toLocalInput(when))}" />
-            <div class="form-hint" id="fb-when-hint">${escapeHTML(meal.label)}</div>
-          </div>
           <div class="form-group">
             <label class="form-label" for="fb-where">Where</label>
             ${comboboxHTML({
@@ -549,6 +562,7 @@ function openBasket(event) {
           ${Number.isFinite(Number(event.data?.amount)) ? `· ${escapeHTML(formatMoney(Number(event.data.amount), event.data?.currency))}` : ''}
         </p>`}
 
+      ${!isNew ? `<label class="form-check"><input type="checkbox" id="fb-not-eaten" ${event.data?.not_eaten ? 'checked' : ''} /> Not eaten yet — keep this as a purchase only</label>` : ''}
       <div class="form-group">
         <label class="form-label" for="fb-toggle">Things you have eaten before</label>
         <div class="fb-picker">
@@ -563,20 +577,20 @@ function openBasket(event) {
             <div class="fb-options" id="fb-options" role="group" aria-label="Dishes"></div>
           </div>
         </div>
-        <div class="form-hint">Tick as many as you had. Ticking one twice is what the quantity is for.</div>
+        <div class="form-hint">Choose what you ate. Quantities are servings; use 0.5 for half a serving.</div>
       </div>
 
       <div class="form-group">
         <label class="form-label" for="fb-new">Something not in the list</label>
         <div class="fb-new">
           <input type="text" class="form-input" id="fb-new" placeholder="e.g. Filter Coffee" autocomplete="off" />
-          <input type="number" class="form-input fb-new-qty" id="fb-new-qty" min="1" step="1" value="1" aria-label="Quantity" />
+          <input type="number" class="form-input fb-new-qty" id="fb-new-qty" min="0.25" step="0.25" value="1" aria-label="Servings eaten" />
           <button type="button" class="btn-sm btn-ghost" id="fb-add"><i class="fas fa-plus"></i> Add</button>
         </div>
       </div>
 
       <div class="form-group">
-        <label class="form-label">${isNew ? 'You ate' : 'In this order'}</label>
+        <label class="form-label">You ate (servings)</label>
         <div id="fb-list"></div>
       </div>`,
     footer: `
@@ -633,7 +647,7 @@ function openBasket(event) {
   const addTyped = () => {
     const name = $('fb-new').value.trim();
     if (!name) return;
-    const qty = Math.max(1, parseInt($('fb-new-qty').value, 10) || 1);
+    const qty = Math.max(0.25, Number($('fb-new-qty').value) || 1);
     const existing = draft.find(i => sameDish(i.name, name));
     if (existing) existing.qty = (existing.qty || 1) + qty;
     else draft.push({ name, qty });
@@ -653,22 +667,30 @@ function openBasket(event) {
     const index = Number(button.dataset.index);
     const item = draft[index];
     if (!item) return;
-    if (button.dataset.act === 'more') item.qty = (item.qty || 1) + 1;
-    if (button.dataset.act === 'less') item.qty = Math.max(1, (item.qty || 1) - 1);
+    if (button.dataset.act === 'more') item.qty = Math.round(((item.qty || 1) + 0.25) * 100) / 100;
+    if (button.dataset.act === 'less') item.qty = Math.max(0.25, Math.round(((item.qty || 1) - 0.25) * 100) / 100);
     if (button.dataset.act === 'remove') draft.splice(index, 1);
     paintBasket();
     paintOptions($('fb-filter').value);
+  });
+
+  $('fb-list').addEventListener('input', e => {
+    if (!e.target.matches('[data-qty]')) return;
+    const item = draft[Number(e.target.dataset.qty)];
+    if (item) item.qty = Number(e.target.value);
   });
 
   $('fb-save').addEventListener('click', async () => {
     const save = $('fb-save');
     save.disabled = true;
     try {
+      if (draft.some(i => !Number.isFinite(i.qty ?? 1) || (i.qty ?? 1) <= 0)) throw new Error('Each serving quantity must be greater than zero.');
       if (isNew) await createMeal();
       else {
         // `items` is the only key sent, and the update merges by key, so every
         // other fact the receipt stated is left exactly as it was.
-        const changes = { data: { items: draft } };
+        const whenValue = $('fb-when').value;
+        const changes = { data: { eaten_items: draft.map(({ amount: _a, ...item }) => item), eaten_at: new Date(whenValue).toISOString(), not_eaten: $('fb-not-eaten')?.checked || false } };
         // A title generated from the dishes follows them; a chosen one stays.
         const title = retitleForItems(event, draft);
         if (title) changes.title = title;
@@ -697,7 +719,7 @@ function openBasket(event) {
       // The place if there was one, otherwise the food itself: "Idli, Vada" is
       // a better line in a timeline than "Meal".
       title: mealTitle(place, draft),
-      data: prune({ restaurant: place || null, items: draft }),
+      data: prune({ restaurant: place || null, items: draft, purchase_event_id: purchase?.id || null }),
       status: 'confirmed',
     }, place ? [entityRef('restaurant', place, 'restaurant')].filter(Boolean) : [], {
       sourceType: 'manual',
@@ -741,7 +763,7 @@ function paintOptions(filter) {
   const dishes = dishCatalogue().filter(d => !needle || d.name.toLowerCase().includes(needle));
 
   label.textContent = draft.length
-    ? `${draft.length} item${draft.length === 1 ? '' : 's'} in this order`
+    ? `${draft.length} item${draft.length === 1 ? '' : 's'} selected`
     : 'Choose dishes';
 
   if (!dishes.length) {
@@ -777,11 +799,11 @@ function paintBasket() {
       <span class="fb-basket-name">${escapeHTML(item.name)}${
         item.options ? `<span class="fd-item-opts"> ${escapeHTML(item.options)}</span>` : ''}</span>
       <span class="fb-stepper">
-        <button type="button" data-act="less" data-index="${index}" aria-label="One fewer ${escapeHTML(item.name)}">
+        <button type="button" data-act="less" data-index="${index}" aria-label="A quarter serving less of ${escapeHTML(item.name)}">
           <i class="fas fa-minus" aria-hidden="true"></i>
         </button>
-        <span class="mono">${item.qty || 1}</span>
-        <button type="button" data-act="more" data-index="${index}" aria-label="One more ${escapeHTML(item.name)}">
+        <input type="number" class="form-input fb-qty mono" data-qty="${index}" min="0.01" step="any" value="${item.qty ?? 1}" aria-label="Servings of ${escapeHTML(item.name)} eaten" />
+        <button type="button" data-act="more" data-index="${index}" aria-label="A quarter serving more of ${escapeHTML(item.name)}">
           <i class="fas fa-plus" aria-hidden="true"></i>
         </button>
       </span>
@@ -802,8 +824,8 @@ function paintBasket() {
 function aggregateDishes(list) {
   const dishes = new Map();
 
-  for (const event of list) {
-    for (const item of event.data?.items || []) {
+  for (const event of list.filter(isMeal)) {
+    for (const item of eatenItems(event)) {
       if (!item?.name) continue;
       const key = String(item.name).toLowerCase().replace(/\s+/g, ' ').trim();
       const dish = dishes.get(key) || {
@@ -812,7 +834,7 @@ function aggregateDishes(list) {
       dish.count += Number(item.qty) || 1;
       // Line items are not converted; a foreign receipt's dishes carry no spend.
       if (Number.isFinite(Number(item.amount)) && isINR(event.data?.currency)) { dish.spend += Number(item.amount); dish.priced++; }
-      if (!dish.lastAt || event.occurred_at > dish.lastAt) dish.lastAt = event.occurred_at;
+      if (!dish.lastAt || eatenAt(event) > dish.lastAt) dish.lastAt = eatenAt(event);
       const place = event.data?.restaurant || event.data?.merchant;
       if (place) dish.places.add(place);
       dishes.set(key, dish);
@@ -846,13 +868,12 @@ function renderDishes(list) {
   // the ranking off the screen. A grid fits four or five across and the whole
   // top of the list is visible at once.
   return `<div class="fd-cards">${dishes.slice(0, 200).map(dish => `
-    <button type="button" class="fd-card" data-dish="${escapeHTML(dish.name)}"
-            title="Show every time you had this">
+    <article class="fd-card">
       <span class="fd-card-top">
         <span class="fd-card-count mono" title="Eaten ${dish.count} time${dish.count === 1 ? '' : 's'}">${dish.count}×</span>
         <span class="fd-card-share mono" title="${share(dish.count)} of everything you ate in this period">${share(dish.count)}</span>
       </span>
-      <span class="fd-card-name">${escapeHTML(dish.name)}</span>
+      <button type="button" class="fd-card-open fd-card-name" data-dish="${escapeHTML(dish.name)}" title="Show every time you had this">${escapeHTML(dish.name)}</button>
       <span class="fd-card-meta">
         <span class="fd-card-where">${escapeHTML([...dish.places].slice(0, 2).join(', '))}${
           dish.places.size > 2 ? ` +${dish.places.size - 2}` : ''}</span>
@@ -861,8 +882,9 @@ function renderDishes(list) {
       <span class="fd-card-foot">
         ${dish.priced ? `<span class="fd-card-spend mono">${escapeHTML(formatINRFull(dish.spend))}</span>` : '<span></span>'}
         ${nutritionChip(dish)}
+        <button type="button" class="fd-library-link" data-library="${escapeHTML(dish.name)}">Correct nutrition</button>
       </span>
-    </button>`).join('')}</div>`;
+    </article>`).join('')}</div>`;
 }
 
 /**
@@ -906,7 +928,6 @@ function renderCalorieChart() {
 
   // Nothing to plot before the resolver has run. An empty chart claims the data
   // exists and is flat; no chart claims nothing.
-  if (!dict.size) { card.hidden = true; calorieChartRef = destroyChart(calorieChartRef); return; }
 
   const zone = timeZone();
   const n = summarise(inPeriod(), dict, { dateOf: iso => localDateISO(iso, zone) });
@@ -1040,15 +1061,15 @@ function renderKPIs() {
   const today = localDateISO(new Date(), zone);
   const target = kcalTarget();
 
-  const meals = list.filter(e => e.subtype !== 'groceries');
-  const todayMeals = meals.filter(e => localDateISO(e.occurred_at, zone) === today);
+  const meals = list.filter(e => isMeal(e));
+  const todayMeals = meals.filter(e => localDateISO(eatenAt(e), zone) === today);
   const spend = list.reduce((sum, e) => sum + rupeeSpend(e), 0);
   const top = aggregateDishes(list)[0];
 
   // Calories only when the dictionary can actually answer. Before the resolver
   // has run there is nothing to show, and a zero would be a claim rather than
   // an absence — so the cards keep their pre-nutrition shape instead.
-  const n = dict.size ? summarise(list, dict, { dateOf: iso => localDateISO(iso, zone) }) : null;
+  const n = summarise(list, dict, { dateOf: iso => localDateISO(iso, zone) });
   const todayKcal = n ? (n.days.find(d => d.day === today)?.kcal ?? null) : null;
   const overDays = n ? n.days.filter(d => d.kcal > target).length : 0;
 
@@ -1077,7 +1098,7 @@ function renderKPIs() {
     { id: 'fd-kpi-over', label: 'Days over target', icon: 'fa-arrow-trend-up',
       value: String(overDays),
       tone: overDays ? 'danger' : 'success',
-      badge: overDays ? undefined : { type: 'ok', text: 'On track' },
+      badge: overDays || n.partial || n.unknown ? undefined : { type: 'neutral', text: 'None recorded over target' },
       sub: `of ${n.activeDays} eating day${n.activeDays === 1 ? '' : 's'}`,
       tooltip: `Days above ${target.toLocaleString('en-IN')} kcal in this period`,
       raw: overDays },
@@ -1108,7 +1129,7 @@ function renderGapCount() {
   const zone = timeZone();
   const { from, to } = periodDates();
   const gaps = events.filter(e => {
-    const d = localDateISO(e.occurred_at, zone);
+    const d = localDateISO(eatenAt(e), zone);
     return d >= from && d <= to && isEmptyBasket(e);
   }).length;
   badge.textContent = gaps;
@@ -1132,18 +1153,19 @@ function listEmptyState() {
 /** One row per item, not per order — the point of the export is the dishes. */
 function exportItems() {
   const zone = timeZone();
-  const headers = ['Date', 'Time', 'Meal', 'Place', 'Ordered via', 'Qty', 'Item', 'Item amount', 'Order total'];
+  const headers = ['Date', 'Time', 'Record', 'Meal', 'Place', 'Ordered via', 'Qty', 'Item', 'Item amount', 'Order total'];
   const rows = [];
 
   for (const event of visible()) {
     const base = [
-      localDateISO(event.occurred_at, zone),
-      formatTime(event.occurred_at),
-      mealMeta(mealSlot(event.occurred_at, zone, event.subtype) || 'snack').label,
+      localDateISO(eatenAt(event), zone),
+      formatTime(eatenAt(event)),
+      isMeal(event) ? 'Eaten' : 'Purchased (not intake)',
+      mealMeta(mealSlot(eatenAt(event), zone, event.subtype) || 'snack').label,
       event.data?.restaurant || event.data?.merchant || '',
       event.data?.ordered_via || '',
     ];
-    const items = event.data?.items || [];
+    const items = eatenItems(event);
     if (!items.length) { rows.push([...base, '', '', '', event.data?.amount ?? '']); continue; }
     for (const item of items) {
       rows.push([...base, item.qty ?? 1, item.name, item.amount ?? '', event.data?.amount ?? '']);
@@ -1155,3 +1177,8 @@ function exportItems() {
 
 
 
+
+window.addEventListener('daybook:identity-change', () => {
+  events = []; dict = new Map(); draft = []; activeTab = 'meals';
+  period = { preset: '30', from: null, to: null }; query = ''; onlyEmpty = false;
+});

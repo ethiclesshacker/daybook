@@ -14,7 +14,7 @@ A daybook is the book a day's entries go into before anything is posted anywhere
 | `#points` | Transactions and redemptions, multiplier tracking, spend-by-merchant, value-per-point, merchant rules, reconcile against card alerts, CSV export. |
 | `#ledger` | **Life** — a chronological record of purchases, meals, travel, meetings and deliveries, filled in automatically from email. Filters, search, provenance on every event, a review queue and export. |
 | `#food` | **Food** — what you actually ate. Days split into breakfast, lunch, snacks and dinner, every order's dishes listed under it, and a ranking of what you eat most. Meals with no receipt behind them — a grocery packet opened on Tuesday, a plate at a friend's — are added by hand, picking from the dishes you have eaten before. |
-| `#dishes` | **Dishes** — the dish dictionary behind Food's calories: correct a dish's numbers, add one, or merge two spellings into one. |
+| `#dishes` | **Nutrition library** — the dish dictionary behind Food's calories: correct a dish's numbers, add one, or merge two spellings into one. |
 | `#health` | **Health** — Apple Health as days: steps, sleep by stage, energy eaten against burned, resting heart rate, HRV, workouts. |
 | `#settings` | Every personal number the other screens derive from. |
 
@@ -253,3 +253,35 @@ supabase/migrations/ SQL
 docs/ledger.md       how the ledger works, end to end
 test/                node:test suites for the pure maths and the ledger core
 ```
+
+## Intake and review corrections
+
+Grocery receipts are purchases, not meals. Food keeps them visible with a
+“not counted as eaten” label. Opening a grocery purchase lets you log the
+servings you ate and when, as a separate manual meal linked by
+`data.purchase_event_id`. It carries no duplicate expense. Delivery portions
+remain assumed eaten unless corrected; fractional servings, an eating date,
+and “not eaten yet” can be recorded without rewriting the receipt's original
+`data.items`, amount or purchase date. Intake overrides live in
+`data.eaten_items`, `data.eaten_at`, and `data.not_eaten`.
+
+Apply **0027_food_consumption.sql** before deploying this UI: it makes the SQL
+nutrition reads use those same rules, including Dashboard, Health and assistant
+reads. It changes read functions only; no existing event is rewritten.
+Apply **0028_review_undo.sql** in the same deployment: it adds ownership-checked,
+version-checked review and Undo RPCs. An Undo restores only status and inference
+and refuses to overwrite an event changed since the review.
+
+Dashboard actions link directly to weight logging, adding a meal and Review.
+Review uses the same search, date and source filters as Timeline. Routine
+corrections use typed fields; unedited receipt facts remain intact. The
+nutrition library is linked from Food's “Most eaten” cards, and returning to
+Food keeps the selected period and search. State and read caches are cleared
+when the signed-in identity changes.
+
+Cash and FDs are the default emergency runway basis. An existing choice to
+include market holdings is kept and labelled explicitly. Illustrative yield
+is distinguished from recorded income; the optional age benchmark starts
+hidden. Health shows dates on older readings and a seven-day weight average;
+`weight_goal_kg` adds an optional goal line. New snapshots can explicitly copy
+the latest balances, with review required before saving.

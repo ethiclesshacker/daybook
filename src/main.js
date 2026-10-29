@@ -1,7 +1,10 @@
 // @ts-check
 import { supabase } from './supabase.js';
 import './vendor.js';
-import { loadSettings } from './settings.js';
+import { loadSettings, clearSettings } from './settings.js';
+import { invalidate } from './cache.js';
+import { stopRouter } from './router.js';
+import { closeModal } from './utils.js';
 import { renderApp } from './views/app.js';
 import { installCallListener, fatalPanel } from './utils.js';
 import './style.css';
@@ -20,6 +23,11 @@ async function render(session) {
   // focus. Re-rendering on those wiped the DOM mid-use and bounced the
   // user back to the dashboard, so only repaint on a real identity change.
   if (userId === renderedUserId) return;
+  stopRouter();
+  invalidate();
+  clearSettings();
+  closeModal();
+  window.dispatchEvent(new Event('daybook:identity-change'));
   renderedUserId = userId;
 
   if (userId) {
@@ -34,7 +42,7 @@ async function render(session) {
   } else {
     // Loaded on demand: a signed-in visit never needs the login screen.
     const { renderLogin } = await import('./views/login.js');
-    renderLogin();
+    if (renderedUserId === null) renderLogin();
   }
 }
 

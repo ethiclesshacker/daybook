@@ -72,7 +72,7 @@ export const SETTINGS_SCHEMA = {
   },
   wealth_score_divisor: {
     type: 'number', default: 10, min: 1, max: 50, step: 1, group: 'Financial independence',
-    label: 'Expected-wealth divisor',
+    label: 'Age benchmark divisor',
     hint: 'The wealth score on Net Worth compares your net worth with an "expected" figure for your age: age × annual income ÷ this number. "The Millionaire Next Door" uses 10; a score of 1.0 or more is ahead for your age.',
   },
 
@@ -81,7 +81,7 @@ export const SETTINGS_SCHEMA = {
     label: 'Emergency runway target', suffix: 'months', hint: 'Below this the runway KPI shows "Build up".',
   },
   emergency_fund_basis: {
-    type: 'enum', default: 'accessible', group: 'Safety',
+    type: 'enum', default: 'cash_like', group: 'Safety',
     options: [
       { value: 'cash_like',  label: 'Cash + FDs only (conservative)' },
       { value: 'accessible', label: 'Cash + stocks + mutual funds' },
@@ -127,6 +127,15 @@ export const SETTINGS_SCHEMA = {
     type: 'number', default: 1800, min: 800, max: 6000, step: 50, group: 'Food',
     label: 'Daily calorie target', suffix: 'kcal',
     hint: 'The line on the Food chart. Days above it show red. ~1,800 gives a 90 kg adult a deficit of about half a kilo a week; recheck it every 5 kg lost.',
+  },
+
+  weight_goal_kg: {
+    type: 'number', default: 0, min: 0, max: 400, step: 0.1, group: 'Food',
+    label: 'Goal weight (optional)', suffix: 'kg', hint: 'Shown on the weight trend. Leave at 0 for no goal line.',
+  },
+  show_wealth_benchmark: {
+    type: 'enum', default: 'hidden', options: [{ value: 'hidden', label: 'Hidden' }, { value: 'shown', label: 'Shown' }], group: 'Financial independence',
+    label: 'Show age benchmark', hint: 'An optional comparison using your chosen age benchmark divisor, not a measure of your progress.',
   },
 
   // ── Event ledger ──────────────────────────────────────

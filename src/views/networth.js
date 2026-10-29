@@ -181,7 +181,10 @@ function renderKPIs() {
   const fiMultiplier    = settings.get('fi_multiplier');
   const fiTarget        = settings.fiTarget();
   const passiveYield    = settings.get('passive_income_yield') / 100;
-  const emergencyFund   = computeEmergencyFund(latest, settings.get('emergency_fund_basis'));
+  const basis = settings.get('emergency_fund_basis');
+  const emergencyFund = computeEmergencyFund(latest, basis);
+  const cashRunway = monthlyExpenses > 0 ? computeEmergencyFund(latest, 'cash_like') / monthlyExpenses : 0;
+  const accessibleRunway = monthlyExpenses > 0 ? computeLiquid(latest) / monthlyExpenses : 0;
 
   const solvency = cur.liabilities > 0 ? (cur.assets / cur.liabilities) : null;
   const passiveIncome = computeInvestables(latest) * passiveYield / 12;
@@ -191,7 +194,6 @@ function renderKPIs() {
   const expectedWealth = (settings.get('age') * settings.get('monthly_net_income') * 12) / settings.get('wealth_score_divisor');
   const wealthScore = expectedWealth > 0 ? (cur.net / expectedWealth).toFixed(2) : '—';
   // "PAW" and "UAW" are the book's terms, not the reader's. Say what they mean.
-  const wealthLabel = parseFloat(wealthScore) >= 1 ? 'ahead for your age' : 'behind for your age';
 
   const kpis = [
     {
@@ -213,20 +215,20 @@ function renderKPIs() {
       tooltip: `Assets ÷ Liabilities. Higher is better. > ${solvencyTarget}× is considered healthy.`,
     },
     {
-      id: 'kpi-passive', label: 'Est. passive income', icon: 'fa-money-bill-wave', tone: 'purple', value: formatINR(passiveIncome), unit: '/mo', raw: passiveIncome.toFixed(0),
-      sub: `At ${(passiveYield * 100).toFixed(0)}% annual yield on investables`,
+      id: 'kpi-passive', label: 'Illustrative monthly yield', icon: 'fa-money-bill-wave', tone: 'purple', value: formatINR(passiveIncome), unit: '/mo', raw: passiveIncome.toFixed(0),
+      sub: `Assumed ${(passiveYield * 100).toFixed(0)}% yield · not recorded income`,
       tooltip: `(Stocks + ETFs + MFs + FDs) × ${(passiveYield * 100).toFixed(0)}% ÷ 12. Blended estimated monthly passive income.`,
     },
     {
-      id: 'kpi-runway', label: 'Emergency runway', icon: 'fa-shield-halved', tone: runway >= runwayTarget ? 'success' : 'warning',
+      id: 'kpi-runway', label: basis === 'cash_like' ? 'Cash runway' : 'Accessible runway', icon: 'fa-shield-halved', tone: runway >= runwayTarget ? 'success' : 'warning',
       value: runway.toFixed(1), unit: 'months', raw: runway.toFixed(1),
-      badge: { text: runway >= runwayTarget ? 'Healthy' : 'Build up', type: runway >= runwayTarget ? 'positive' : 'neutral' },
-      sub: `${settings.get('emergency_fund_basis') === 'cash_like' ? 'Cash + FDs' : 'Liquid'} ÷ ${formatINRFull(monthlyExpenses)}/mo baseline`,
+      badge: { text: basis !== 'cash_like' ? 'Includes market risk' : runway >= runwayTarget ? 'At your target' : 'Below target', type: basis === 'cash_like' && runway >= runwayTarget ? 'positive' : 'neutral' },
+      sub: basis === 'cash_like' ? `Cash + FDs · ${accessibleRunway.toFixed(1)} mo including market holdings` : `${cashRunway.toFixed(1)} mo in cash + FDs; remaining runway uses market holdings`,
       tooltip: `Emergency fund ÷ monthly baseline expenses. Target: ≥ ${runwayTarget} months.`,
     },
     {
       id: 'kpi-fi', label: 'FI progress', icon: 'fa-bullseye', tone: 'pink', value: formatPercent(Math.min(fiPct, 100)), raw: fiPct.toFixed(1),
-      sub: `Wealth score ${wealthScore} — ${wealthLabel}`,
+      sub: settings.get('show_wealth_benchmark') === 'shown' ? `Optional age benchmark: ${wealthScore}×` : 'Against your chosen FI target',
       progress: Math.min(Math.max(fiPct, 0), 100),
       tooltip: `${fiMultiplier}× rule: target ₹${(fiTarget/1e7).toFixed(2)}Cr. Wealth Score from "The Millionaire Next Door".`,
     },
@@ -338,9 +340,11 @@ function renderTable() {
 }
 
 // ── Form Modal ───────────────────────────────────────────
-function openEntryForm(entry = null) {
+function openEntryForm(entry = null, carry = false) {
   editingId = entry?.id || null;
 
+  const previous = entries[entries.length - 1];
+  const seed = entry || (carry ? previous : null);
   const money = (id, label, value) => `
     <div class="form-group">
       <label class="form-label" for="${id}">${label}</label>
@@ -350,6 +354,8 @@ function openEntryForm(entry = null) {
   openModal({
     title: entry ? 'Edit snapshot' : 'Add a snapshot',
     body: `
+      ${!entry && previous ? `<div class="snapshot-start"><p>${carry ? `Balances copied from ${escapeHTML(formatDate(previous.date))}. Review every carried balance before saving.` : 'Start with your last balances and update only what changed.'}</p><button type="button" class="btn-sm btn-ghost" id="nw-carry">${carry ? 'Start blank instead' : 'Start from latest snapshot'}</button></div>` : ''}
+      ${carry ? '<label class="form-check"><input type="checkbox" id="nw-reviewed" /> I reviewed all carried balances</label>' : ''}
       <div class="form-group">
         <label class="form-label" for="nw-f-date">Date</label>
         <input type="date" class="form-input" id="nw-f-date" value="${escapeHTML(entry?.date || todayISO())}" />
@@ -359,26 +365,26 @@ function openEntryForm(entry = null) {
         <i class="fas fa-arrow-up" aria-hidden="true"></i>Assets
       </div>
       <div class="form-row">
-        ${money('nw-f-etfs', 'ETFs (₹)', entry?.etfs)}
-        ${money('nw-f-stocks', 'Stocks (₹)', entry?.stocks)}
+        ${money('nw-f-etfs', 'ETFs (₹)', seed?.etfs)}
+        ${money('nw-f-stocks', 'Stocks (₹)', seed?.stocks)}
       </div>
       <div class="form-row">
-        ${money('nw-f-mf', 'Mutual Funds (₹)', entry?.mutual_funds)}
-        ${money('nw-f-fds', 'Fixed Deposits (₹)', entry?.fds)}
+        ${money('nw-f-mf', 'Mutual Funds (₹)', seed?.mutual_funds)}
+        ${money('nw-f-fds', 'Fixed Deposits (₹)', seed?.fds)}
       </div>
       <div class="form-row">
-        ${money('nw-f-cash', 'Cash & Bank (₹)', entry?.cash)}
-        ${money('nw-f-epf', 'EPF (₹)', entry?.epf)}
+        ${money('nw-f-cash', 'Cash & Bank (₹)', seed?.cash)}
+        ${money('nw-f-epf', 'EPF (₹)', seed?.epf)}
       </div>
       <div class="form-row">
-        ${money('nw-f-gold', 'Physical metals (₹)', entry?.gold)}
-        ${money('nw-f-lent', 'Lent & owed to you (₹)', entry?.lent)}
+        ${money('nw-f-gold', 'Physical metals (₹)', seed?.gold)}
+        ${money('nw-f-lent', 'Lent & owed to you (₹)', seed?.lent)}
       </div>
 
       <div class="form-section is-danger">
         <i class="fas fa-arrow-down" aria-hidden="true"></i>Liabilities
       </div>
-      ${money('nw-f-cc', 'Credit Cards Outstanding (₹)', entry?.credit_cards)}
+      ${money('nw-f-cc', 'Credit Cards Outstanding (₹)', seed?.credit_cards)}
       <p class="form-hint">Enter the full card dues here and what people owe you under Lent — the net shows below, so neither needs adjusting by hand.</p>
 
       <!-- Live preview -->
@@ -397,6 +403,8 @@ function openEntryForm(entry = null) {
       <button type="button" class="btn-cancel" data-close>Cancel</button>
       <button type="button" class="btn-submit" id="nw-form-submit">${entry ? 'Save changes' : 'Add snapshot'}</button>`,
   });
+
+  document.getElementById('nw-carry')?.addEventListener('click', () => openEntryForm(null, !carry));
 
   // Live preview
   const fields = [...ASSET_FIELDS.map(f => FIELD_IDS[f.key]), 'nw-f-cc'];
@@ -445,6 +453,8 @@ async function submitForm() {
       user_id: await getCurrentUserId(),
     };
 
+    const reviewed = document.getElementById('nw-reviewed');
+    if (reviewed && !reviewed.checked) { showToast('Review the carried balances and tick the confirmation before saving.', 'error'); return; }
     if (!payload.date) { showToast('Please select a date.', 'error'); return; }
     if (editingId) payload.id = editingId;
 
