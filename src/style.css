@@ -3174,45 +3174,22 @@ input, select, textarea {
 }
 .fb-context strong { color: var(--text-primary); font-weight: 600; }
 
-.fb-picker { position: relative; }
+/* One box. Suggestions sit in the flow under it, not floating over it: an
+   absolutely positioned list inside a scrolling modal body is clipped by that
+   scroll container. Kept to a handful of rows so the basket below never moves
+   far. */
+.fb-entry .form-label { margin-bottom: 0.35rem; }
 
-.fb-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  cursor: pointer;
-  text-align: left;
-}
+.fb-suggest { display: grid; gap: 0.1rem; margin-top: 0.3rem; }
+.fb-suggest:empty { display: none; }
 
-/* In the flow, not floating over it. An absolutely positioned panel inside a
-   scrolling modal body is clipped by that scroll container, which left six
-   dishes visible and the rest unreachable. Opening it pushes the form down and
-   the modal scrolls, which is the behaviour that actually works. */
-.fb-panel {
-  margin-top: 0.3rem;
-  padding: 0.5rem;
-  border: 1px solid var(--border-hover);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-}
-
-.fb-filter { margin-bottom: 0.4rem; }
-
-.fb-options {
-  max-height: 15rem;
-  overflow-y: auto;
-  display: grid;
-  gap: 0.1rem;
-}
-
-.fb-option {
+.fb-sugg {
   display: grid;
   grid-template-columns: 1rem minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.5rem;
   width: 100%;
-  padding: 0.3rem 0.4rem;
+  padding: 0.35rem 0.5rem;
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
@@ -3221,14 +3198,46 @@ input, select, textarea {
   text-align: left;
   cursor: pointer;
 }
-.fb-option:hover, .fb-option:focus-visible { background: var(--bg-hover); outline: none; }
-.fb-option.is-on { color: var(--text-primary); }
-.fb-option.is-on i { color: var(--accent); }
-.fb-option-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fb-option-count { color: var(--text-muted); font-size: var(--fs-xs); }
+.fb-sugg i { color: var(--text-muted); font-size: var(--fs-xs); }
+.fb-sugg:hover { background: var(--bg-hover); }
+.fb-sugg.is-active { background: var(--accent-dim); color: var(--text-primary); }
+.fb-sugg.is-active i { color: var(--accent); }
+.fb-sugg-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-sugg-qty { color: var(--accent); margin-right: 0.35rem; }
+.fb-sugg-meta { color: var(--text-muted); font-size: var(--fs-xs); }
 
-.fb-new { display: flex; gap: 0.5rem; align-items: center; }
-.fb-new-qty { width: 4.5rem; flex: none; }
+.fb-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
+.fb-chips-label { font-size: var(--fs-xs); color: var(--text-muted); margin-right: 0.15rem; }
+.fb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 100%;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fb-chip i { font-size: 0.6rem; color: var(--text-muted); }
+.fb-chip:hover, .fb-chip:focus-visible { color: var(--accent); border-color: var(--border-accent); outline: none; }
+
+#fb-list:not(:empty) { margin-top: 0.6rem; }
+
+/* The row a save or a chart click just pointed at, marked for a moment. */
+@keyframes fdFlash {
+  from { background: var(--accent-dim); }
+  to   { background: transparent; }
+}
+.fd-page .is-flash { animation: fdFlash 1.8s ease-out; border-radius: var(--radius-sm); }
+@media (prefers-reduced-motion: reduce) {
+  .fd-page .is-flash { animation: none; outline: 2px solid var(--accent); outline-offset: 2px; }
+}
 
 .fb-basket { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
 
@@ -4259,3 +4268,27 @@ button.user-profile:focus-visible { outline: 2px solid var(--accent); outline-of
   .dash-stats.dash-stats--row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dash-top .dash-nw-stat { margin-left: 0; }
 }
+
+/* Daily actions stay compact; record maintenance belongs next to the numbers. */
+.daily-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); margin: var(--sp-3) 0; }
+.daily-actions > span { color: var(--text-secondary); margin-right: var(--sp-2); font-size: 0.85rem; }
+.dash-stat.is-stale { opacity: 0.65; }
+.life-category-note, .fd-purchase-note { display: block; color: var(--text-muted); font-size: 0.75rem; }
+.review-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
+.review-actions .btn-sm { min-height: 36px; }
+.toast-action { margin-left: var(--sp-3); border: 0; background: transparent; color: inherit; text-decoration: underline; cursor: pointer; padding: 0.5rem; font: inherit; }
+.fd-card-open { text-align: left; color: inherit; background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
+.fd-card-open:hover { color: var(--accent); }
+.fd-card-foot { flex-wrap: wrap; }
+.fd-library-link { color: var(--accent); font: inherit; font-size: 0.75rem; border: 0; background: none; padding: 0.5rem 0; text-align: left; cursor: pointer; }
+.snapshot-start { padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: var(--sp-4); }
+.snapshot-start p { color: var(--text-secondary); margin-bottom: var(--sp-2); }
+#weight-value { margin-bottom: var(--sp-4); }
+@media (max-width: 640px) {
+  .daily-actions { align-items: stretch; }
+  .daily-actions > span { flex-basis: 100%; }
+  .daily-actions button { flex: 1 1 auto; min-height: 44px; }
+  .review-actions .btn-sm { min-height: 44px; }
+}
+.fb-stepper .fb-qty { width: 4.5rem; min-width: 0; padding: 0.35rem; text-align: center; }
+.dash-stat-sub { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.4; }

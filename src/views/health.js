@@ -13,10 +13,11 @@
 // also available as a table.
 // ======================================================
 
+import * as settings from '../settings.js';
 import { Chart } from '../chart-setup.js';
 import * as health from '../health/api.js';
 import {
-  shiftISO, shortDay, longDay, formatHours, summarise, fillHours,
+  shiftISO, shortDay, longDay, formatHours, summarise, fillHours, readingLabel, rollingMean,
 } from '../health/summary.js';
 import {
   destroyChart, escapeHTML, cssVar, renderKpiCards, todayISO, CHART_COLORS, emptyState, timeAgo,
@@ -78,6 +79,8 @@ export async function renderHealth(container) {
         ${chartCard('hl-steps', 'Steps', 'Per day, one source per day so the Watch and phone are never added together. Select a bar to see that day by the hour.')}
         ${chartCard('hl-sleep', 'Sleep', 'Time asleep per night, by stage. A night is dated by the morning it ended.', sleepLegend())}
       </div>
+
+      ${chartCard('hl-weight', 'Weight trend', 'Recorded weigh-ins and their seven-day average. Missing days stay empty; the average uses recorded readings only.')}
 
       ${chartCard('hl-energy', 'Energy: eaten against burned',
         'Kilocalories per day. Burned is measured all day by the Watch; eaten comes from receipts and what you told Edith, so it is a floor. Paler bars are days with a meal that could not be priced, or today.',
@@ -187,7 +190,7 @@ async function load() {
     const [days, nights, workouts, cat, life] = await Promise.all([
       health.overview(from, to), health.sleep(from, to), health.activity(from, to), health.catalog(),
       // The joined days feed one chart; the rest of the page still stands without them.
-      health.days(from, to).catch(() => []),
+      health.days(from, to).catch(() => []), settings.ready(),
     ]);
     if (token !== loadToken || !document.getElementById('hl-kpis')) return;
 
@@ -210,13 +213,16 @@ async function load() {
         hint: 'Open HealthSync on your iPhone and run a sync. See docs/health-sync.md for setup.',
       });
     } else {
-      alertEl.innerHTML = '';
+      const lastDay = cat?.last_sync_at ? String(cat.last_sync_at).slice(0, 10) : null;
+      alertEl.innerHTML = lastDay && lastDay < shiftISO(todayISO(), -1)
+        ? '<p class="dash-banner dash-banner--error" role="status">Watch data is out of date. Open HealthSync on your iPhone and run a sync. Food and manual weigh-ins can still be current.</p>' : '';
     }
 
     renderKpis();
     renderSteps();
     renderSleep();
     renderEnergy();
+    renderWeight();
     renderLine('rhr', 'hl-rhr', 'resting_hr', 'bpm', CHART_COLORS.pink);
     renderLine('hrv', 'hl-hrv', 'hrv_ms', 'ms', CHART_COLORS.teal);
     renderWorkouts();
@@ -244,19 +250,19 @@ function renderKpis() {
     {
       id: 'hk-steps', label: 'Steps', icon: 'fa-shoe-prints', tone: 'accent',
       value: int(s.stepsAvg), unit: s.stepsAvg !== null ? '/day' : '', raw: Math.round(s.stepsAvg ?? 0),
-      sub: s.stepsToday !== null ? `Today so far ${int(s.stepsToday)}` : 'Nothing yet today',
+      sub: s.stepsToday !== null ? `Today so far ${int(s.stepsToday)}` : 'No reading today',
       tooltip: `${span} average over completed days. Today is left out because it is not over.`,
     },
     {
       id: 'hk-sleep', label: 'Sleep', icon: 'fa-moon', tone: 'purple',
       value: formatHours(s.sleepAvg), raw: s.sleepAvg?.toFixed(2) ?? 0,
-      sub: s.sleepLast ? `Last night ${formatHours(s.sleepLast.value)}` : 'No nights recorded',
+      sub: s.sleepLast ? `${readingLabel(s.sleepLast.day, todayISO(), { sleep: true })} · ${formatHours(s.sleepLast.value)}` : 'No nights recorded',
       tooltip: `${span} average of time actually asleep. Time in bed and awake periods are not counted.`,
     },
     {
       id: 'hk-rhr', label: 'Resting heart rate', icon: 'fa-heart-pulse', tone: 'pink',
       value: s.restingLatest ? int(s.restingLatest.value) : '—', unit: s.restingLatest ? 'bpm' : '', raw: s.restingLatest?.value ?? 0,
-      sub: s.restingAvg !== null ? `${span} average ${int(s.restingAvg)}` : '',
+      sub: s.restingLatest ? `${readingLabel(s.restingLatest.day, todayISO())} · average ${int(s.restingAvg)}` : 'No reading recorded',
       tooltip: 'Latest daily resting heart rate from Apple Health.',
     },
     {
@@ -275,7 +281,7 @@ function renderKpis() {
       id: 'hk-weight', label: 'Weight', icon: 'fa-weight-scale', tone: 'success',
       value: s.weightLatest ? s.weightLatest.value.toFixed(1) : '—', unit: s.weightLatest ? 'kg' : '', raw: s.weightLatest?.value ?? 0,
       sub: s.weightLatest ? `Recorded ${shortDay(s.weightLatest.day)}` : `No reading in ${state.range} days`,
-      tooltip: 'Latest body mass reading in Apple Health within this range.',
+      tooltip: 'Latest weigh-in from Apple Health or one you logged, within this range.',
     },
   ]);
 }
@@ -454,6 +460,27 @@ function renderLine(key, canvasId, field, unit, color) {
       }],
     },
     options,
+  });
+}
+
+function renderWeight() {
+  const options = baseOptions({ unit: 'kg' });
+  options.scales.y.beginAtZero = false;
+  options.scales.y.grace = '10%';
+  const goal = Number(settings.get('weight_goal_kg')) || 0;
+  draw('weight', 'hl-weight', {
+    type: 'line',
+    data: {
+      labels: state.days.map(d => shortDay(d.day)),
+      datasets: [
+        { label: 'Weight', data: state.days.map(d => d.weight_kg ?? null),
+          borderColor: CHART_COLORS.teal, pointRadius: 3, borderWidth: 1, spanGaps: false },
+        { label: 'Seven-day average', data: rollingMean(state.days, 'weight_kg'),
+          borderColor: CHART_COLORS.accent, pointRadius: 0, borderWidth: 2, spanGaps: false },
+        ...(goal > 0 ? [{ label: 'Goal', data: state.days.map(() => goal), refLabel: `${goal} kg goal`,
+          borderColor: cssVar('--text-muted'), borderDash: [4, 4], pointRadius: 0, borderWidth: 1 }] : []),
+      ],
+    }, options,
   });
 }
 

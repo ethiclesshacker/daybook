@@ -36,6 +36,7 @@ export async function renderSettings(container) {
     container.innerHTML = '<div class="page-body"><div class="skeleton skeleton--table"></div></div>';
   }
   await settings.ready();
+  if (!container.isConnected) return;
   draft = settings.all();
   saved = settings.all();
 
@@ -275,19 +276,15 @@ function renderDerived() {
 // ── Writes ─────────────────────────────────────────────
 
 async function resetOne(key) {
-  const { error } = await settings.resetSetting(key);
-  if (error) { showToast('Reset failed: ' + error.message, 'error'); return; }
-
   const value = SETTINGS_SCHEMA[key].default;
   draft[key] = value;
-  saved[key] = value;
 
   const input = document.getElementById(`set-${key}`);
   if (input) input.value = isMoney(SETTINGS_SCHEMA[key]) ? grouped(value) : value;
   reflectField(key);
   renderDerived();
   reflectBar();
-  showToast(`${SETTINGS_SCHEMA[key].label} reset to its default.`);
+  showToast(`${SETTINGS_SCHEMA[key].label} reset in your draft. Save changes to apply it.`);
 }
 
 async function save() {

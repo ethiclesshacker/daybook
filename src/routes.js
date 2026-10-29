@@ -18,7 +18,7 @@ export const NAV_ITEMS = [
 
   { id: 'ledger',    icon: 'fa-timeline',     label: 'Life',             group: 'Every day' },
   { id: 'food',      icon: 'fa-utensils',     label: 'Food' },
-  { id: 'dishes',    icon: 'fa-book-open',    label: 'Dishes' },
+  { id: 'dishes',    icon: 'fa-book-open',    label: 'Nutrition library' },
   { id: 'health',    icon: 'fa-heart-pulse',  label: 'Health' },
 
   { id: 'points',    icon: 'fa-credit-card',  label: 'Points & Rewards', group: 'Money' },
@@ -31,3 +31,9 @@ export const NAV_ITEMS = [
 
 export const VIEW_IDS = NAV_ITEMS.map(item => item.id);
 export const FALLBACK_VIEW = 'dashboard';
+
+/** Route arguments survive reloads and give dashboard actions a precise destination. */
+export function parseRoute(hash) {
+  const [id, query = ''] = String(hash).replace(/^#/, '').split('?');
+  return { id: VIEW_IDS.includes(id) ? id : FALLBACK_VIEW, params: new URLSearchParams(query) };
+}

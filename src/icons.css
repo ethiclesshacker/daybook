@@ -1031,9 +1031,6 @@
 .fa-copy {
   --fa: "\f0c5";
 }
-.fa-square {
-  --fa: "\f0c8";
-}
 .fa-bars {
   --fa: "\f0c9";
 }
@@ -1081,9 +1078,6 @@
 }
 .fa-bullseye {
   --fa: "\f140";
-}
-.fa-square-check {
-  --fa: "\f14a";
 }
 .fa-euro-sign {
   --fa: "\f153";

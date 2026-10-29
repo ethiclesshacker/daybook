@@ -17,8 +17,9 @@
 // for.
 // ======================================================
 
+import { routeParams, navigateTo } from '../router.js';
 import * as api from '../ledger/api.js';
-import { SOURCE_LABEL } from '../ledger/nutrition.js';
+import { SOURCE_LABEL, isMeal, eatenItems, eatenAt } from '../ledger/nutrition.js';
 import { normalizeName } from '../ledger/normalize.js';
 import { escapeHTML, showToast, emptyState } from '../utils.js';
 
@@ -37,16 +38,16 @@ const NUM_FIELDS = ['kcal', 'protein_g', 'carbs_g', 'fat_g', 'portion_g'];
 const LIMITS = { kcal: [0, 20000], protein_g: [0, 500], carbs_g: [0, 2000], fat_g: [0, 500], portion_g: [0.1, 20000] };
 
 export async function renderDishes(container) {
-  query = ''; filter = 'all'; sort = 'eaten';
+  query = routeParams().get('query') ?? query;
   editingId = null; mergingId = null; resetArmed = null;
 
   container.innerHTML = `
     <div class="page-header">
       <div class="page-header-left">
-        <h2>Dishes</h2>
+        <h2>Nutrition library</h2>
         <p>Per serving as sold. A change here re-values every meal that ever had the dish.</p>
       </div>
-      <div class="table-actions">
+      <div class="table-actions"><button type="button" class="btn-sm btn-ghost" id="dd-back">Back to Food</button>
         <button type="button" class="btn-sm btn-accent" id="dd-add">
           <i class="fas fa-plus" aria-hidden="true"></i> Add dish
         </button>
@@ -102,6 +103,10 @@ export async function renderDishes(container) {
       </div>
     </div>`;
 
+  document.getElementById('dd-back').addEventListener('click', () => navigateTo('food'));
+  document.getElementById('dd-search').value = query;
+  document.getElementById('dd-filter').value = filter;
+  document.getElementById('dd-sort').value = sort;
   document.getElementById('dd-search').addEventListener('input', e => { query = e.target.value.trim(); paint(); });
   document.getElementById('dd-filter').addEventListener('change', e => { filter = e.target.value; paint(); });
   document.getElementById('dd-sort').addEventListener('change', e => { sort = e.target.value; paint(); });
@@ -131,11 +136,11 @@ async function load() {
   try {
     const [dict, result] = await Promise.all([
       api.foodDictionaryAll(),
-      api.searchEvents({ types: ['food'], limit: 1000 }).catch(() => ({ events: [] })),
+      api.foodEvents(),
     ]);
     if (token !== loadToken || !document.getElementById('dd-rows')) return;
     rows = dict;
-    usage = countUsage(result?.events || []);
+    usage = countUsage(result || []);
     paint();
   } catch (err) {
     if (token !== loadToken) return;
@@ -152,15 +157,15 @@ async function load() {
 /** How often each dish appears in the ledger, keyed the way the rollup keys it. */
 function countUsage(events) {
   const map = new Map();
-  for (const event of events) {
+  for (const event of events.filter(isMeal)) {
     if (event.status === 'dismissed') continue;
-    for (const item of event.data?.items || []) {
+    for (const item of eatenItems(event)) {
       const key = normalizeName(item?.name);
       if (!key) continue;
       const qty = Number.isFinite(Number(item.qty)) && Number(item.qty) > 0 ? Number(item.qty) : 1;
       const entry = map.get(key) || { count: 0, last: null };
       entry.count += qty;
-      if (!entry.last || event.occurred_at > entry.last) entry.last = event.occurred_at;
+      if (!entry.last || eatenAt(event) > entry.last) entry.last = eatenAt(event);
       map.set(key, entry);
     }
   }
@@ -426,3 +431,5 @@ async function merge(duplicateId) {
     showToast(err.message, 'error');
   }
 }
+
+window.addEventListener('daybook:identity-change', () => { rows = []; usage = new Map(); query = ''; filter = 'all'; sort = 'eaten'; });

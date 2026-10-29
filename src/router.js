@@ -13,7 +13,7 @@
 // chunk, fetched the first time it is opened rather than in front of the
 // first paint of every screen.
 
-import { VIEW_IDS, FALLBACK_VIEW } from './routes.js';
+import { VIEW_IDS, FALLBACK_VIEW, parseRoute } from './routes.js';
 
 const routes = {};
 let currentId = null;
@@ -54,7 +54,7 @@ export function prefetchRoute(id) {
 
 /** Read the current hash and return the view ID it maps to. */
 function hashToView() {
-  const hash = window.location.hash.replace('#', '').trim();
+  const hash = window.location.hash.replace('#', '').trim().split('?')[0];
   if (VIEW_IDS.includes(hash)) return hash;
   // An unknown or retired route (#fi) lands on the fallback with the URL to match,
   // so the nav highlights it and a reload does not repeat the detour.
@@ -64,12 +64,15 @@ function hashToView() {
 
 /** Navigate to a view — updates hash, active nav item, renders the view. */
 export function navigateTo(viewId) {
-  if (!VIEW_IDS.includes(viewId)) viewId = FALLBACK_VIEW;
+  const target = viewId;
+  const parsed = parseRoute(target);
+  viewId = parsed.id;
+  const hash = VIEW_IDS.includes(target.split('?')[0]) ? target : FALLBACK_VIEW;
 
   // Only push a new hash if we're actually changing views
   // (avoids double-render on the initial hashchange after page load)
-  if (window.location.hash !== '#' + viewId) {
-    window.location.hash = viewId;
+  if (window.location.hash !== '#' + hash) {
+    window.location.hash = hash;
     return; // hashchange handler will call _render
   }
 
@@ -152,4 +155,13 @@ export function startRouter() {
 
   // Render the initial view from the current hash (handles refresh & deep-link)
   _render(hashToView());
+}
+
+export function routeParams() { return parseRoute(window.location.hash).params; }
+
+/** Release the active view when signing out as well as when navigating. */
+export function stopRouter() {
+  renderToken++;
+  routes[currentId]?.unmount?.();
+  currentId = null;
 }

@@ -12,12 +12,14 @@
 // a model made up.
 // ======================================================
 
+import { routeParams } from '../router.js';
+import { correctFacts, reviewFilters } from '../ledger/corrections.js';
 import * as api from '../ledger/api.js';
-import { EVENT_TYPES, STATUSES, SOURCE_TYPES, SUBTYPES, typeMeta, statusMeta, sourceMeta, categoryMeta } from '../ledger/taxonomy.js';
+import { EVENT_TYPES, CATEGORIES, STATUSES, SOURCE_TYPES, SUBTYPES, typeMeta, statusMeta, sourceMeta, categoryMeta } from '../ledger/taxonomy.js';
 // import { parseQuickEntry } from '../ledger/nlparse.js';  // now loaded on demand, see loadParser()
 import { summariseItems } from '../ledger/items.js';
 import { localDateISO, amountInr } from '../ledger/normalize.js';
-import { formatTime as fmtTime, formatDayHeading, toLocalInput, dayStartISO } from '../ledger/dates.js';
+import { formatTime as fmtTime, formatDayHeading, toLocalInput, dayStartISO, shiftISO } from '../ledger/dates.js';
 import { isInflow, moneyFlow } from '../ledger/summary.js';
 import * as settings from '../settings.js';
 import {
@@ -51,8 +53,8 @@ const timeZone = () => settings.get('ledger_timezone') || 'Asia/Kolkata';
 const formatTime = iso => fmtTime(iso, timeZone());
 
 export async function renderLedger(container) {
-  activeTab = 'timeline';
-  filters = { query: '', types: [], statuses: [], sourceTypes: [], from: null, to: null };
+  const params = routeParams();
+  if (params.has('tab')) activeTab = params.get('tab') === 'review' ? 'review' : 'timeline';
 
   container.innerHTML = `
     <div class="page-header lg-header">
@@ -189,7 +191,20 @@ export async function renderLedger(container) {
     if (e.key === 'Escape') { filterPanel.open = false; filterPanel.querySelector('summary').focus(); }
   });
 
+  document.getElementById('lg-search').value = filters.query;
+  for (const [id, key] of [['lg-filter-type', 'types'], ['lg-filter-source', 'sourceTypes'], ['lg-filter-status', 'statuses']]) document.getElementById(id).value = filters[key][0] || '';
+  document.getElementById('lg-filter-from').value = filters.from ? localDateISO(filters.from, timeZone()) : '';
+  document.getElementById('lg-filter-to').value = filters.to ? shiftISO(localDateISO(filters.to, timeZone()), -1) : '';
+  reflectFilterCount();
+  for (const [tab, id] of [['timeline', 'lg-tab-timeline'], ['review', 'lg-tab-review']]) {
+    document.getElementById(id).classList.toggle('active', activeTab === tab);
+    document.getElementById(id).setAttribute('aria-selected', String(activeTab === tab));
+  }
   await loadData();
+  if (routeParams().get('action') === 'weight' && document.getElementById('lg-fab')) {
+    history.replaceState(null, '', '#ledger');
+    openWeightForm();
+  }
 }
 
 export { renderLedger as render };
@@ -223,21 +238,12 @@ function pick(id) {
 function dayBoundary(id, exclusiveEnd) {
   const value = document.getElementById(id)?.value;
   if (!value) return null;
-  const [y, m, d] = value.split('-').map(Number);
-  const date = new Date(Date.UTC(y, m - 1, d + (exclusiveEnd ? 1 : 0)));
-  // Approximate the user's zone by asking the browser for the same wall clock.
-  return new Date(date.toISOString().slice(0, 10) + 'T00:00:00' + zoneSuffix()).toISOString();
-}
-
-function zoneSuffix() {
-  const offset = -new Date().getTimezoneOffset();
-  const sign = offset >= 0 ? '+' : '-';
-  const pad = n => String(Math.floor(Math.abs(n))).padStart(2, '0');
-  return `${sign}${pad(offset / 60)}:${pad(offset % 60)}`;
+  return dayStartISO(exclusiveEnd ? shiftISO(value, 1) : value, timeZone());
 }
 
 async function switchTab(tab) {
   activeTab = tab;
+  history.replaceState(null, '', '#ledger?tab=' + tab);
   for (const [name, el] of [['timeline', 'lg-tab-timeline'], ['review', 'lg-tab-review']]) {
     const button = document.getElementById(el);
     button?.classList.toggle('active', tab === name);
@@ -249,6 +255,12 @@ async function switchTab(tab) {
   await loadData();
 }
 
+function searchList(offset) {
+  const args = activeTab === 'review' ? reviewFilters(filters) : filters;
+  if (activeTab === 'review' && !args.statuses.length) return Promise.resolve({ events: [], total: 0 });
+  return api.searchEvents({ ...args, limit: PAGE, offset });
+}
+
 async function loadData() {
   afterMutate = loadData;
   const token = ++loadToken;
@@ -257,7 +269,7 @@ async function loadData() {
 
   try {
     const [result, review, runs, written, kpiStats] = await Promise.all([
-      activeTab === 'review' ? api.reviewQueue(PAGE) : api.searchEvents({ ...filters, limit: PAGE }),
+      searchList(0),
       api.reviewQueue(PAGE),
       api.recentRuns(3).catch(() => []),
       // Written nightly from the same events. Missing summaries are normal —
@@ -425,7 +437,7 @@ function renderTimeline() {
               ${list.length} event${list.length === 1 ? '' : 's'}${dayTotal ? ` · ${escapeHTML(formatINRFull(dayTotal))}` : ''}
             </span>
           </div>
-          ${written?.summary ? `
+          ${activeTab !== 'review' && written?.summary ? `
             <div class="tl-day-summary is-clamped" role="button" tabindex="0"
                     aria-expanded="false"
                     title="Written from these events by ${escapeHTML(written.generated_by || 'the system')}">
@@ -461,10 +473,13 @@ function renderTimeline() {
     });
   });
 
+  container.querySelectorAll('[data-review]').forEach(button => button.addEventListener('click', e => { e.stopPropagation(); reviewEvent(button.dataset.event, button.dataset.review, button); }));
+  container.querySelectorAll('[data-correct]').forEach(button => button.addEventListener('click', async e => { e.stopPropagation(); try { openEdit(await api.getEvent(button.dataset.correct)); } catch (err) { showToast(err.message, 'error'); } }));
+  container.querySelectorAll('[data-evidence]').forEach(button => button.addEventListener('click', e => { e.stopPropagation(); openDetail(button.dataset.evidence); }));
   container.querySelectorAll('.tl-item').forEach(row => {
-    row.addEventListener('click', () => openDetail(row.dataset.id));
+    row.addEventListener('click', e => { if (!e.target.closest('button')) openDetail(row.dataset.id); });
     row.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(row.dataset.id); }
+      if (e.target === row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDetail(row.dataset.id); }
     });
   });
 }
@@ -477,11 +492,7 @@ async function loadMore(button) {
   button.disabled = true;
   button.textContent = 'Loading…';
   try {
-    const next = activeTab === 'review'
-      // ledger_review_queue has no offset; it is a search on two statuses, so
-      // ask for a longer queue and keep what is new.
-      ? await api.reviewQueue(events.length + PAGE)
-      : await api.searchEvents({ ...filters, limit: PAGE, offset: events.length });
+    const next = await searchList(events.length);
     if (token !== loadToken) return;
     const seen = new Set(events.map(e => e.id));
     events = events.concat((next?.events || []).filter(e => !seen.has(e.id)));
@@ -579,7 +590,7 @@ function renderRow(event) {
 
   return `
     <article class="tl-item ${needsReview ? 'is-review' : ''} ${uncertain ? 'is-inferred' : ''}"
-             data-id="${escapeHTML(event.id)}" role="button" tabindex="0"
+             data-id="${escapeHTML(event.id)}" ${activeTab === 'review' ? '' : 'role="button" tabindex="0"'}
              aria-label="${escapeHTML(event.title)}">
       <div class="tl-when">
         <span class="tl-time mono">${escapeHTML(formatTime(event.occurred_at))}</span>
@@ -599,7 +610,8 @@ function renderRow(event) {
           ${scheduled ? `<span class="tl-flag is-scheduled" title="${escapeHTML(status.hint)}">Scheduled</span>` : ''}
         </div>
         ${activeTab === 'review' && (needsReview || uncertain) ? `
-          <div class="tl-why"><i class="fas fa-circle-question" aria-hidden="true"></i>${escapeHTML(reviewReason(event) || status.hint)}</div>` : ''}
+          <div class="tl-why"><i class="fas fa-circle-question" aria-hidden="true"></i>${escapeHTML(reviewReason(event) || status.hint)}</div>
+          <div class="review-actions"><button type="button" class="btn-sm btn-accent" data-review="confirmed" data-event="${escapeHTML(event.id)}">Confirm</button><button type="button" class="btn-sm btn-ghost" data-correct="${escapeHTML(event.id)}">Correct</button><button type="button" class="btn-sm btn-ghost" data-review="dismissed" data-event="${escapeHTML(event.id)}">Dismiss</button><button type="button" class="btn-sm btn-ghost" data-evidence="${escapeHTML(event.id)}">Evidence</button></div>` : ''}
       </div>
 
       ${Number.isFinite(amount) ? `
@@ -624,7 +636,7 @@ function timelineEmptyState() {
 
   if (activeTab === 'review') {
     return emptyState({
-      icon: 'fa-circle-check', tone: 'success', title: 'Nothing waiting for review.',
+      icon: 'fa-circle-check', tone: 'success', title: filtered ? 'No review entries match these filters.' : 'Nothing waiting for review.',
       hint: 'Uncertain extractions land here to be confirmed, corrected, merged or dismissed.',
     });
   }
@@ -707,6 +719,7 @@ async function openDetail(eventId) {
         ? section('Interpretation', renderFields(event.inference, event.data), 'Derived, not stated. Safe to disagree with.')
         : ''}
 
+      ${event.data?.purchase_event_id ? '<button type="button" class="btn-sm btn-ghost" id="lg-purchase">Open the original purchase receipt</button>' : ''}
       ${section('Sources', renderSources(event.sources), 'Every piece of evidence for this event.')}
       ${event.entities?.length ? section('Entities', renderEntities(event.entities)) : ''}
       ${event.related_events?.length ? section('Related events', renderRelated(event.related_events)) : ''}
@@ -728,6 +741,8 @@ async function openDetail(eventId) {
   });
 
   wireCopyButtons();
+
+  document.getElementById('lg-purchase')?.addEventListener('click', () => openDetail(event.data.purchase_event_id));
 
   document.getElementById('lg-confirm-btn')?.addEventListener('click', async () => {
     await mutate(() => api.updateEvent(event.id, { status: 'confirmed' }), 'Confirmed.');
@@ -758,6 +773,51 @@ async function mutate(action, successMessage) {
   } catch (err) {
     showToast(err.message, 'error');
   }
+}
+
+async function reviewEvent(id, status, button) {
+  const token = loadToken;
+  const controls = [...button.closest('.review-actions').querySelectorAll('button')];
+  controls.forEach(b => { b.disabled = true; });
+  try {
+    const before = await api.getEvent(id);
+    const after = await api.reviewEvent(id, status, before.updated_at);
+    if (token === loadToken) await loadData();
+    showToast(status === 'dismissed' ? 'Dismissed.' : 'Confirmed.', 'success', {
+      actionLabel: 'Undo', duration: 12000,
+      onAction: async () => {
+        await api.restoreReview(id, after.updated_at, before.status, before.inference || {});
+        if (document.getElementById('lg-timeline')) await loadData();
+        showToast('Review undone.');
+      },
+    });
+  } catch (err) { showToast(err.message, 'error'); controls.forEach(b => { b.disabled = false; }); }
+}
+
+function openWeightForm() {
+  openModal({ title: 'Log weight', body: `
+    <label class="form-label" for="weight-value">Weight (kg)</label>
+    <input class="form-input" type="number" id="weight-value" min="25" max="400" step="0.01" inputmode="decimal" />
+    <label class="form-label" for="weight-when">Measured at</label>
+    <input class="form-input" type="datetime-local" id="weight-when" value="${escapeHTML(toLocalInput(new Date().toISOString()))}" />
+    <p class="form-hint">A second reading on the same day corrects the earlier one.</p>`,
+    footer: '<button type="button" class="btn-cancel" data-close>Cancel</button><button type="button" class="btn-submit" id="weight-save">Save weight</button>',
+  });
+  document.getElementById('weight-save').addEventListener('click', async e => {
+    const value = Number(document.getElementById('weight-value').value);
+    const when = document.getElementById('weight-when').value;
+    if (!Number.isFinite(value) || value < 25 || value > 400 || !when) { showToast('Enter a weight between 25 and 400 kg and a measurement time.', 'error'); return; }
+    e.target.disabled = true;
+    try {
+      const occurred_at = new Date(when).toISOString();
+      const data = { metric: 'weight', value, unit: 'kg' };
+      const title = `Weight ${value} kg`;
+      const result = await api.createEvent({ type: 'health', subtype: 'measurement', occurred_at, title, data,
+        dedupe_key: `measurement:weight:${localDateISO(occurred_at, timeZone())}`, status: 'confirmed' });
+      if (result?.action !== 'created' && result?.event_id) await api.updateEvent(result.event_id, { data, occurred_at, title });
+      closeModal(); await loadData(); showToast('Weight saved.');
+    } catch (err) { e.target.disabled = false; showToast(err.message, 'error'); }
+  });
 }
 
 function section(title, body, hint) {
@@ -1096,9 +1156,23 @@ function knownSubtypes(type) {
  * trusting if fixing it is easy. The previous values survive in the audit log.
  */
 function openEdit(event) {
+  const edited = new Set();
+  const facts = event.data || {};
   openModal({
     title: 'Edit event',
     body: `
+      <div class="form-row">
+        <div class="form-group"><label class="form-label" for="lg-e-amount">Amount</label><input type="number" min="0" step="0.01" class="form-input" id="lg-e-amount" value="${escapeHTML(facts.amount ?? '')}" /></div>
+        <div class="form-group"><label class="form-label" for="lg-e-currency">Currency</label><input type="text" maxlength="3" class="form-input" id="lg-e-currency" value="${escapeHTML(facts.currency ?? '')}" placeholder="INR" /></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label" for="lg-e-merchant">Merchant</label><input type="text" class="form-input" id="lg-e-merchant" value="${escapeHTML(facts.merchant ?? '')}" /></div>
+        <div class="form-group"><label class="form-label" for="lg-e-restaurant">Restaurant / place eaten</label><input type="text" class="form-input" id="lg-e-restaurant" value="${escapeHTML(facts.restaurant ?? '')}" /></div>
+      </div>
+      <div class="form-group"><label class="form-label" for="lg-e-category">Category</label>
+        <select class="form-select" id="lg-e-category"><option value="">Automatic</option>${CATEGORIES.map(c => `<option value="${c.id}" ${facts.category === c.id ? 'selected' : ''}>${escapeHTML(c.label)}</option>`).join('')}</select>
+      </div>
+      <details class="lg-advanced"><summary>Source evidence</summary>${renderSources(event.sources)}</details>
       <div class="form-row">
         <div class="form-group">
           <label class="form-label" for="lg-e-when">When</label>
@@ -1130,13 +1204,11 @@ function openEdit(event) {
         <label class="form-label" for="lg-e-desc">Description</label>
         <input type="text" class="form-input" id="lg-e-desc" value="${escapeHTML(event.description || '')}" />
       </div>
-      <div class="form-group">
-        <label class="form-label" for="lg-e-data">Facts (JSON)</label>
-        <textarea class="form-input is-code" id="lg-e-data" rows="7" spellcheck="false">${escapeHTML(JSON.stringify(event.data || {}, null, 2))}</textarea>
-        <div class="form-hint">
-          What the sources stated. Editing here is a correction by you and replaces the extracted value.
-        </div>
-      </div>
+      <details class="lg-advanced"><summary>Advanced facts (JSON)</summary>
+        <label class="sr-only" for="lg-e-data">All facts as JSON</label>
+        <textarea class="form-input is-code" id="lg-e-data" rows="7" spellcheck="false">${escapeHTML(JSON.stringify(facts, null, 2))}</textarea>
+        <p class="form-hint">Other receipt details are preserved. Fields you change above take precedence over this JSON.</p>
+      </details>
       <div class="form-group">
         <label class="form-label" for="lg-e-status">State</label>
         <select class="form-select" id="lg-e-status">
@@ -1150,6 +1222,8 @@ function openEdit(event) {
   });
 
   wireCombobox('lg-e-subtype');
+  wireCopyButtons();
+  for (const key of ['amount', 'currency', 'merchant', 'restaurant', 'category']) document.getElementById('lg-e-' + key).addEventListener('input', () => edited.add(key));
 
   // Cancel goes back to the detail it came from; the × closes outright.
   document.getElementById('lg-edit-cancel').addEventListener('click', () => openDetail(event.id));
@@ -1157,9 +1231,10 @@ function openEdit(event) {
   document.getElementById('lg-edit-save').addEventListener('click', async () => {
     let data;
     try {
-      data = JSON.parse(document.getElementById('lg-e-data').value || '{}');
+      data = correctFacts(JSON.parse(document.getElementById('lg-e-data').value || '{}'),
+        Object.fromEntries([...edited].map(key => [key, document.getElementById('lg-e-' + key).value])));
     } catch (err) {
-      showToast('The facts field is not valid JSON: ' + err.message, 'error');
+      showToast(err.message, 'error');
       return;
     }
 
@@ -1172,6 +1247,7 @@ function openEdit(event) {
       description: document.getElementById('lg-e-desc').value.trim() || null,
       status: document.getElementById('lg-e-status').value,
       data,
+      ...(edited.has('category') && !data.category ? { inference: { category_source: 'derived' } } : {}),
     }, { replaceData: true }), 'Saved.');
   });
 }
@@ -1264,3 +1340,5 @@ function exportLedger() {
     }
   });
 }
+
+window.addEventListener('daybook:identity-change', () => { events = []; summaries = {}; activeTab = 'timeline'; filters = { query: '', types: [], statuses: [], sourceTypes: [], from: null, to: null }; });

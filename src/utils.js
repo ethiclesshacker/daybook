@@ -195,7 +195,7 @@ let toastTimeout = null;
  * message cannot become markup. (It used to be innerHTML, and every caller
  * had to remember to escape.)
  */
-export function showToast(message, type = 'success') {
+export function showToast(message, type = 'success', { actionLabel = '', onAction = null, duration = 3000 } = {}) {
   const existing = document.querySelector('.toast');
   if (existing) existing.remove();
   if (toastTimeout) clearTimeout(toastTimeout);
@@ -207,9 +207,19 @@ export function showToast(message, type = 'success') {
   toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
   toast.innerHTML = `<i class="fas ${icon}" aria-hidden="true"></i>`;
   toast.append(document.createTextNode(' ' + String(message ?? '')));
+  if (onAction) {
+    const action = document.createElement('button');
+    action.type = 'button'; action.className = 'toast-action'; action.textContent = actionLabel;
+    action.addEventListener('click', async () => {
+      action.disabled = true;
+      try { await onAction(); toast.remove(); }
+      catch (err) { showToast(err.message, 'error'); }
+    });
+    toast.append(action);
+  }
   document.body.appendChild(toast);
 
-  toastTimeout = setTimeout(() => toast.remove(), 3000);
+  toastTimeout = setTimeout(() => toast.remove(), duration);
 }
 
 // ======================================================

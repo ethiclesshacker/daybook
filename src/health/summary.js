@@ -87,3 +87,16 @@ export function fillHours(buckets) {
   const byHour = new Map((buckets || []).map(b => [Number(String(b.at).slice(0, 2)), Number(b.value) || 0]));
   return Array.from({ length: 24 }, (_, h) => ({ hour: h, label: `${String(h).padStart(2, '0')}:00`, value: byHour.get(h) || 0 }));
 }
+
+/** Say when this measurement was recorded, not when the page was opened. */
+export function readingLabel(day, today, { sleep = false } = {}) {
+  if (day === today) return sleep ? 'Last night' : 'Today';
+  return `Recorded ${shortDay(day)}`;
+}
+
+/** Seven calendar days, averaging only recorded readings and preserving gaps. */
+export function rollingMean(days, key, window = 7) {
+  return days.map((day, i) => present(day[key])
+    ? meanOf(days.slice(Math.max(0, i - window + 1), i + 1), key)
+    : null);
+}

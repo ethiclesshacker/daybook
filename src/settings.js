@@ -18,6 +18,7 @@ let cache = defaults();
 // painting the shell: the request goes out alongside the first view's own
 // queries, and anything that needs a personal number to paint awaits this.
 let readyPromise = null;
+let settingsGeneration = 0;
 
 /** Resolves once the first loadSettings() has settled (it never rejects). */
 export function ready() {
@@ -54,10 +55,12 @@ export function loadSettings() {
 }
 
 async function fetchSettings() {
+  const generation = ++settingsGeneration;
   const next = defaults();
 
   const { data, error } = await supabase.from('user_settings').select('key, value');
 
+  if (generation !== settingsGeneration) return { settings: cache, error: null };
   if (error) {
     // A missing table (before the migration is run) or a network blip must not
     // take the app down — defaults are always a usable answer.
@@ -162,4 +165,8 @@ export function realReturnRate(values = cache) {
   const nominal = values.expected_return / 100;
   const inflation = values.inflation_rate / 100;
   return (1 + nominal) / (1 + inflation) - 1;
+}
+
+export function clearSettings() {
+  cache = defaults(); readyPromise = null; settingsGeneration++;
 }
