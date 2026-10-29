@@ -72,7 +72,7 @@ export async function renderFood(container) {
     <div class="page-header lg-header fd-header">
       <div class="page-header-left">
         <h2>Food</h2>
-        <p>Recorded intake — measured against <span id="fd-target-text">${escapeHTML(String(kcalTarget().toLocaleString('en-IN')))}</span> kcal a day</p><p class="form-hint">Delivery portions are assumed eaten until corrected. Grocery purchases count only when logged as a meal.</p>
+        <p>Recorded intake — measured against <span id="fd-target-text">${escapeHTML(String(kcalTarget().toLocaleString('en-IN')))}</span> kcal a day</p><p class="form-hint">Delivery portions are assumed eaten until corrected. Grocery purchases are left out; add what you ate from them as a meal.</p>
       </div>
       <div class="lg-header-actions fd-period-wrap">
         <div class="chart-toggle" role="group" aria-label="Period">
@@ -240,7 +240,10 @@ function switchTab(tab) {
 async function loadData() {
   const token = ++loadToken;
   const body = document.getElementById('fd-body');
-  if (body) body.innerHTML = `<div class="skeleton skeleton--table"></div>`;
+  // A reload after a save keeps the list where it was; only a first load,
+  // with nothing to show yet, gets the skeleton.
+  const scrollTop = body?.scrollTop ?? 0;
+  if (body && !events.length) body.innerHTML = `<div class="skeleton skeleton--table"></div>`;
 
   try {
     // Everything, not the selected period: the dish picker offers what you
@@ -261,9 +264,12 @@ async function loadData() {
     if (targetText) targetText.textContent = kcalTarget().toLocaleString('en-IN');
     // A dismissed event is one you said did not happen. It stays in the
     // ledger so ingestion cannot recreate it, but it was never eaten.
-    events = (result || []).filter(e => e.status !== 'dismissed');
+    // A grocery order is a purchase, not a plate: what was eaten from it is
+    // its own meal, added here by hand, so the order itself stays off the page.
+    events = (result || []).filter(e => e.status !== 'dismissed' && e.subtype !== 'groceries');
     dict = indexDictionary(rows);
     paint();
+    body.scrollTop = scrollTop;
   } catch (err) {
     if (token !== loadToken) return;
     if (body) {
@@ -404,7 +410,7 @@ function renderMeals(list) {
     const inOrder = [...dayEvents].sort((a, b) => new Date(eatenAt(a)) - new Date(eatenAt(b)));
 
     return `
-      <section class="tl-day" aria-label="${escapeHTML(heading)}">
+      <section class="tl-day" data-day="${escapeHTML(day)}" aria-label="${escapeHTML(heading)}">
         <header class="tl-day-head">
           <div class="tl-day-id">
             <span class="tl-day-label">${escapeHTML(heading)}</span>
@@ -442,7 +448,7 @@ function renderMealRow(event, meta) {
 
   return `
     <article class="tl-item fd-meal" data-basket="${escapeHTML(event.id)}" role="button" tabindex="0"
-             aria-label="${event.subtype === 'groceries' ? 'Log a portion from this purchase' : 'Edit what you ate'}: ${escapeHTML(label)}">
+             aria-label="Edit what you ate: ${escapeHTML(label)}">
       <div class="tl-when">
         <span class="tl-time mono">${escapeHTML(formatTime(eatenAt(event)))}</span>
         <button type="button" class="tl-src fd-src" data-detail="${escapeHTML(event.id)}"
@@ -475,10 +481,11 @@ function renderMealRow(event, meta) {
              ${event.subtype === 'restaurant' ? 'Paid at the table — add what you had' : 'Add what you had'}
            </div>`}
         <div class="tl-meta">
-          <span class="fd-tag" style="color:${meta.color}">${escapeHTML(meta.label)}</span>${!isMeal(event) ? `<span class="fd-purchase-note">Purchased · not counted as eaten. ${event.subtype === 'groceries' ? 'Click to log a portion.' : 'Click to update intake.'}</span>` : ''}
+          <span class="fd-tag" style="color:${meta.color}">${escapeHTML(meta.label)}</span>${!isMeal(event) ? '<span class="fd-purchase-note">Purchased · not counted as eaten. Click to update intake.</span>' : ''}
           ${place ? `<span>${escapeHTML(place)}</span>` : ''}
           ${nut.basis === 'partial' ? `<span class="fd-partial" title="${nut.missing} of ${
             nut.total} items have no nutrition yet, so this total is short">+${nut.missing} unpriced</span>` : ''}
+          ${items.length && nut.kcal === null && dict.size && isMeal(event) ? `<span class="fd-partial" title="Not in the nutrition library yet. The nutrition pass estimates new dishes on its next run.">kcal pending</span>` : ''}
         </div>
       </div>
 
@@ -497,17 +504,21 @@ function renderMealRow(event, meta) {
 // Shri Manjunatha Foods and nothing else, and a bill paid at a table itemises
 // nothing at all. Those are the plates only you can fill in.
 //
-// Typing a dish name every time would be the wrong shape for that — you eat
-// the same twenty things, and a free-text field turns "Cheese Masala Dosa"
-// into four spellings that never aggregate. So the picker leads with
-// everything the ledger has ever recorded, and typing is the fallback for a
-// dish that is genuinely new.
+// One box does all of it. Typing filters everything the ledger has ever
+// recorded, so "dos" offers the Masala Dosa you already eat instead of a fifth
+// spelling of it; Enter adds whatever is highlighted — the dish you picked, or
+// what you typed when it is new — and leaves the cursor in the box for the
+// next one. There used to be a dish list and a separate "not in the list"
+// field with its own Add button, and a dish typed there and never Added was
+// silently dropped on Save. Now nothing typed is lost: Save adds what is still
+// in the box, exactly as Enter would have.
 //
 // The same editor also *creates* a meal, because plenty of eating leaves no
-// receipt at all: four things arrive from Blinkit as one grocery purchase, and
-// eating two of them on Tuesday evening is a different event on a different
-// day with no money attached to it. Buying and eating are not the same event,
-// so this writes a new one rather than editing the order.
+// receipt at all. Buying and eating are not the same event, so this writes a
+// new one rather than editing an order.
+
+const SUGGESTIONS = 6;      // rows offered while typing
+const OFTEN = 8;            // one-tap chips while the box is empty
 
 /** Every distinct dish the ledger knows, most-eaten first. */
 function dishCatalogue() {
@@ -524,15 +535,52 @@ function placeCatalogue() {
   return [...seen.values()].sort();
 }
 
+/**
+ * "2 idli", "0.5 dosa", "2x vada" → a quantity and a name. A leading number is
+ * only a quantity when the whole phrase is not itself a known dish, so "7 Up"
+ * stays a drink.
+ */
+function parseEntry(text) {
+  const raw = String(text || '').trim();
+  const match = raw.match(/^(\d+(?:\.\d+)?|½)\s*(?:x|×)?\s+(.+)$/i);
+  if (!match || dishCatalogue().some(d => sameDish(d.name, raw))) return { qty: 1, name: raw };
+  const qty = match[1] === '½' ? 0.5 : Number(match[1]);
+  return { qty: qty > 0 ? qty : 1, name: match[2].trim() };
+}
+
+/** Known dishes for what has been typed, best match first, minus the basket. */
+function suggestDishes(needle, limit) {
+  const want = normDish(needle);
+  const ranked = [];
+  for (const dish of dishCatalogue()) {
+    if (draft.some(i => sameDish(i.name, dish.name))) continue;
+    const key = normDish(dish.name);
+    const rank = !want ? 1
+      : key === want ? 0
+      : key.startsWith(want) ? 1
+      : key.split(' ').some(word => word.startsWith(want)) ? 2
+      : key.includes(want) ? 3 : null;
+    if (rank !== null) ranked.push({ dish, rank });
+  }
+  // Stable: the catalogue is already most-eaten first within a rank.
+  return ranked.sort((a, b) => a.rank - b.rank).slice(0, limit).map(r => ({ ...r.dish, rank: r.rank }));
+}
+
+/** Add to the basket, snapping to the spelling the ledger already uses. */
+function addToDraft(name, qty = 1) {
+  const known = dishCatalogue().find(d => sameDish(d.name, name));
+  const existing = draft.find(i => sameDish(i.name, name));
+  if (existing) existing.qty = Math.round(((existing.qty || 1) + qty) * 100) / 100;
+  else draft.push({ name: known ? known.name : name, qty });
+}
+
 function openBasket(event) {
   // A copy: nothing is written until Save, so Cancel is a real cancel.
   draft = (event ? eatenItems(event) : []).map(item => ({ ...item }));
-  if (event?.subtype === 'groceries') draft = draft.map(({ amount: _a, ...item }) => item);
 
-  const purchase = event?.subtype === 'groceries' ? event : null;
-  const isNew = !event || Boolean(purchase);
+  const isNew = !event;
   const zone = timeZone();
-  const when = purchase ? new Date().toISOString() : (event ? eatenAt(event) : new Date().toISOString());
+  const when = event ? eatenAt(event) : new Date().toISOString();
   const where = event ? (event.data?.restaurant || event.data?.merchant || event.title) : null;
   const meal = mealMeta(mealSlot(when, zone, event?.subtype) || 'snack');
 
@@ -540,59 +588,36 @@ function openBasket(event) {
     title: isNew ? 'What did you eat?' : 'What did you have?',
     icon: meal.icon, iconColor: meal.color,
     body: `
-      ${purchase ? '<p class="form-hint">Log only what you ate. The grocery receipt stays unchanged and is not counted as intake.</p>' : ''}
-      <div class="form-group"><label class="form-label" for="fb-when">When you ate</label><input type="datetime-local" class="form-input" id="fb-when" value="${escapeHTML(toLocalInput(when))}" /></div>
-      ${isNew ? `
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label" for="fb-where">Where</label>
-            ${comboboxHTML({
-              id: 'fb-where',
-              placeholder: 'Leave blank if it was at home',
-              options: placeCatalogue(),
-            })}
-          </div>
-        </div>`
-      : `
+      ${isNew ? '' : `
         <p class="fb-context">
           <strong>${escapeHTML(where)}</strong>
-          · ${escapeHTML(formatDayHeading(localDateISO(when, zone)))}
-          ${escapeHTML(formatTime(when))}
           · ${escapeHTML(meal.label)}
           ${Number.isFinite(Number(event.data?.amount)) ? `· ${escapeHTML(formatMoney(Number(event.data.amount), event.data?.currency))}` : ''}
         </p>`}
 
-      ${!isNew ? `<label class="form-check"><input type="checkbox" id="fb-not-eaten" ${event.data?.not_eaten ? 'checked' : ''} /> Not eaten yet — keep this as a purchase only</label>` : ''}
-      <div class="form-group">
-        <label class="form-label" for="fb-toggle">Things you have eaten before</label>
-        <div class="fb-picker">
-          <button type="button" class="form-input fb-toggle" id="fb-toggle"
-                  aria-expanded="false" aria-controls="fb-panel">
-            <span id="fb-toggle-label">Choose dishes</span>
-            <i class="fas fa-chevron-down" aria-hidden="true"></i>
-          </button>
-          <div class="fb-panel" id="fb-panel" hidden>
-            <input type="text" class="form-input fb-filter" id="fb-filter"
-                   placeholder="Filter" autocomplete="off" aria-label="Filter dishes" />
-            <div class="fb-options" id="fb-options" role="group" aria-label="Dishes"></div>
-          </div>
-        </div>
-        <div class="form-hint">Choose what you ate. Quantities are servings; use 0.5 for half a serving.</div>
+      <div class="form-group fb-entry">
+        <label class="form-label" for="fb-input">What you ate</label>
+        <input type="text" class="form-input" id="fb-input" autocomplete="off" spellcheck="false"
+               placeholder="Type a dish, press Enter — “2 idli” adds two"
+               role="combobox" aria-autocomplete="list" aria-controls="fb-suggest" aria-expanded="false" />
+        <div class="fb-suggest" id="fb-suggest" role="listbox" aria-label="Dishes"></div>
+        <div id="fb-list" aria-live="polite"></div>
+        <div class="form-hint">Enter adds · ↑ ↓ picks a dish you have had before · Enter on an empty box saves. Quantities are servings.</div>
       </div>
 
-      <div class="form-group">
-        <label class="form-label" for="fb-new">Something not in the list</label>
-        <div class="fb-new">
-          <input type="text" class="form-input" id="fb-new" placeholder="e.g. Filter Coffee" autocomplete="off" />
-          <input type="number" class="form-input fb-new-qty" id="fb-new-qty" min="0.25" step="0.25" value="1" aria-label="Servings eaten" />
-          <button type="button" class="btn-sm btn-ghost" id="fb-add"><i class="fas fa-plus"></i> Add</button>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="fb-when">When you ate</label>
+          <input type="datetime-local" class="form-input" id="fb-when" value="${escapeHTML(toLocalInput(when))}" />
         </div>
+        ${isNew ? `
+          <div class="form-group">
+            <label class="form-label" for="fb-where">Where</label>
+            ${comboboxHTML({ id: 'fb-where', placeholder: 'Blank if at home', options: placeCatalogue() })}
+          </div>` : ''}
       </div>
 
-      <div class="form-group">
-        <label class="form-label">You ate (servings)</label>
-        <div id="fb-list"></div>
-      </div>`,
+      ${isNew ? '' : `<label class="form-check"><input type="checkbox" id="fb-not-eaten" ${event.data?.not_eaten ? 'checked' : ''} /> Not eaten yet — keep this as a purchase only</label>`}`,
     footer: `
       <button type="button" class="btn-cancel" data-close>Cancel</button>
       <button type="button" class="btn-submit" id="fb-save">${isNew ? 'Add meal' : 'Save'}</button>`,
@@ -600,66 +625,94 @@ function openBasket(event) {
 
   const $ = id => document.getElementById(id);
   if (isNew) wireCombobox('fb-where');
-  const panel = $('fb-panel');
-  const toggle = $('fb-toggle');
+  const input = $('fb-input');
+  const suggest = $('fb-suggest');
 
-  const closePanel = () => { panel.hidden = true; toggle.setAttribute('aria-expanded', 'false'); };
+  // What Enter would add right now: the rows on offer and the one highlighted.
+  let options = [];
+  let active = 0;
 
-  // Which meal it counts as is the clock's answer, so show it changing as the
-  // time is changed rather than announcing it after the fact.
-  $('fb-when')?.addEventListener('input', e => {
-    const value = e.target.value;
-    const hint = $('fb-when-hint');
-    if (!value || !hint) return;
-    hint.textContent = mealMeta(mealSlot(new Date(value).toISOString(), timeZone()) || 'snack').label;
-  });
+  const paintSuggest = () => {
+    const entry = parseEntry(input.value);
+    if (!entry.name) {
+      // An empty box offers what you eat most, one tap each.
+      options = [];
+      const often = suggestDishes('', OFTEN);
+      input.setAttribute('aria-expanded', 'false');
+      suggest.innerHTML = often.length ? `
+        <div class="fb-chips">
+          <span class="fb-chips-label">Often</span>
+          ${often.map(d => `<button type="button" class="fb-chip" data-pick="${escapeHTML(d.name)}">
+            <i class="fas fa-plus" aria-hidden="true"></i>${escapeHTML(d.name)}</button>`).join('')}
+        </div>` : '';
+      return;
+    }
 
-  toggle.addEventListener('click', () => {
-    const open = panel.hidden;
-    panel.hidden = !open;
-    toggle.setAttribute('aria-expanded', String(open));
-    if (open) $('fb-filter').focus();
-  });
+    const matches = suggestDishes(entry.name, SUGGESTIONS);
+    const known = matches.map(d => ({ name: d.name, count: d.count }));
+    const fresh = { name: entry.name, isNew: true };
+    // What Enter means is whatever sits first. A dish whose name, or one of
+    // whose words, starts with what you typed is almost always the one you
+    // mean — "dos" is the Masala Dosa you have had 25 times, the same snapping
+    // Hermes does — so it leads, and "add as new" is one arrow away. A match
+    // only somewhere in the middle of a name is too loose to assume, so then
+    // what you typed leads.
+    options = matches.some(d => sameDish(d.name, entry.name)) ? known
+      : matches[0]?.rank <= 2 ? [...known, fresh]
+      : [fresh, ...known];
+    active = Math.min(active, options.length - 1);
+    const qty = entry.qty !== 1 ? `<span class="fb-sugg-qty mono">${entry.qty}×</span>` : '';
 
-  // Clicking anywhere else in the modal closes the list, but a click *inside*
-  // it is a selection and must not.
-  //
-  // The path, not `e.target.closest()`: ticking a dish re-renders the options,
-  // so by the time this handler runs the clicked element has been replaced and
-  // walking up from it finds nothing — which closed the list on every tick and
-  // made a multi-select single-select. composedPath() is fixed at dispatch.
-  document.getElementById('modal-overlay').addEventListener('click', e => {
-    const inside = (e.composedPath?.() || [])
-      .some(node => node instanceof Element && node.classList.contains('fb-picker'));
-    if (!panel.hidden && !inside) closePanel();
-  });
-
-  $('fb-filter').addEventListener('input', e => paintOptions(e.target.value));
-
-  $('fb-options').addEventListener('click', e => {
-    const option = e.target.closest('[data-name]');
-    if (!option) return;
-    toggleItem(option.dataset.name);
-    paintBasket();
-    paintOptions($('fb-filter').value);
-  });
-
-  const addTyped = () => {
-    const name = $('fb-new').value.trim();
-    if (!name) return;
-    const qty = Math.max(0.25, Number($('fb-new-qty').value) || 1);
-    const existing = draft.find(i => sameDish(i.name, name));
-    if (existing) existing.qty = (existing.qty || 1) + qty;
-    else draft.push({ name, qty });
-    $('fb-new').value = '';
-    $('fb-new-qty').value = '1';
-    $('fb-new').focus();
-    paintBasket();
-    paintOptions($('fb-filter').value);
+    input.setAttribute('aria-expanded', 'true');
+    suggest.innerHTML = options.map((option, index) => `
+      <button type="button" class="fb-sugg ${index === active ? 'is-active' : ''}" role="option"
+              id="fb-sugg-${index}" aria-selected="${index === active}" data-index="${index}">
+        <i class="fas ${option.isNew ? 'fa-plus' : 'fa-clock-rotate-left'}" aria-hidden="true"></i>
+        <span class="fb-sugg-name">${qty}${escapeHTML(option.name)}</span>
+        <span class="fb-sugg-meta mono">${option.isNew ? 'new' : `${option.count}×`}</span>
+      </button>`).join('');
+    input.setAttribute('aria-activedescendant', `fb-sugg-${active}`);
   };
 
-  $('fb-add').addEventListener('click', addTyped);
-  $('fb-new').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addTyped(); } });
+  const repaint = () => { paintBasket(); paintSuggest(); };
+
+  /** Add what Enter would add. True if something was added. */
+  const commit = () => {
+    const entry = parseEntry(input.value);
+    if (!entry.name) return false;
+    addToDraft(options[active]?.name ?? entry.name, entry.qty);
+    input.value = '';
+    active = 0;
+    repaint();
+    return true;
+  };
+
+  input.addEventListener('input', () => { active = 0; paintSuggest(); });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!options.length) return;
+      e.preventDefault();
+      active = (active + (e.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+      paintSuggest();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (!commit()) save();
+    } else if (e.key === 'Escape' && input.value) {
+      // Clear the box, not the whole dialog.
+      e.preventDefault();
+      input.value = '';
+      paintSuggest();
+    }
+  });
+
+  suggest.addEventListener('click', e => {
+    const chip = e.target.closest('[data-pick]');
+    const row = e.target.closest('[data-index]');
+    if (chip) { addToDraft(chip.dataset.pick); repaint(); }
+    else if (row) { active = Number(row.dataset.index); commit(); }
+    else return;
+    input.focus();
+  });
 
   $('fb-list').addEventListener('click', e => {
     const button = e.target.closest('[data-act]');
@@ -670,8 +723,8 @@ function openBasket(event) {
     if (button.dataset.act === 'more') item.qty = Math.round(((item.qty || 1) + 0.25) * 100) / 100;
     if (button.dataset.act === 'less') item.qty = Math.max(0.25, Math.round(((item.qty || 1) - 0.25) * 100) / 100);
     if (button.dataset.act === 'remove') draft.splice(index, 1);
-    paintBasket();
-    paintOptions($('fb-filter').value);
+    repaint();
+    if (button.dataset.act === 'remove') input.focus();
   });
 
   $('fb-list').addEventListener('input', e => {
@@ -680,30 +733,46 @@ function openBasket(event) {
     if (item) item.qty = Number(e.target.value);
   });
 
-  $('fb-save').addEventListener('click', async () => {
-    const save = $('fb-save');
-    save.disabled = true;
+  // Cmd/Ctrl+Enter saves from anywhere in the dialog.
+  $('fb-when').closest('.modal')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.defaultPrevented) { e.preventDefault(); save(); }
+  });
+
+  $('fb-save').addEventListener('click', save);
+
+  let saving = false;
+  async function save() {
+    if (saving) return;
+    const button = $('fb-save');
+    saving = true;
+    button.disabled = true;
     try {
+      // Whatever is still in the box was meant to be in the meal.
+      commit();
       if (draft.some(i => !Number.isFinite(i.qty ?? 1) || (i.qty ?? 1) <= 0)) throw new Error('Each serving quantity must be greater than zero.');
-      if (isNew) await createMeal();
+      let savedId;
+      if (isNew) savedId = await createMeal();
       else {
-        // `items` is the only key sent, and the update merges by key, so every
-        // other fact the receipt stated is left exactly as it was.
+        // Only these keys are sent, and the update merges by key, so every
+        // fact the receipt stated is left exactly as it was.
         const whenValue = $('fb-when').value;
         const changes = { data: { eaten_items: draft.map(({ amount: _a, ...item }) => item), eaten_at: new Date(whenValue).toISOString(), not_eaten: $('fb-not-eaten')?.checked || false } };
         // A title generated from the dishes follows them; a chosen one stays.
         const title = retitleForItems(event, draft);
         if (title) changes.title = title;
         await api.updateEvent(event.id, changes);
+        savedId = event.id;
         showToast(draft.length ? 'Saved.' : 'Cleared.');
       }
       closeModal();
       await loadData();
+      revealEvent(savedId);
     } catch (err) {
-      save.disabled = false;
+      saving = false;
+      button.disabled = false;
       showToast(err.message, 'error');
     }
-  });
+  }
 
   async function createMeal() {
     const place = $('fb-where').value.trim();
@@ -712,14 +781,14 @@ function openBasket(event) {
     const whenValue = $('fb-when').value;
     const occurredAt = whenValue ? new Date(whenValue).toISOString() : new Date().toISOString();
 
-    await api.createEvent({
+    const result = await api.createEvent({
       occurred_at: occurredAt,
       type: 'food',
       subtype: 'meal',
       // The place if there was one, otherwise the food itself: "Idli, Vada" is
       // a better line in a timeline than "Meal".
       title: mealTitle(place, draft),
-      data: prune({ restaurant: place || null, items: draft, purchase_event_id: purchase?.id || null }),
+      data: prune({ restaurant: place || null, items: draft }),
       status: 'confirmed',
     }, place ? [entityRef('restaurant', place, 'restaurant')].filter(Boolean) : [], {
       sourceType: 'manual',
@@ -730,13 +799,12 @@ function openBasket(event) {
       allowMerge: false,
     });
     showToast('Meal added.');
+    return result?.event_id;
   }
 
-  paintBasket();
-  paintOptions('');
+  repaint();
+  input.focus();
 }
-
-/** A datetime-local value for an instant, in the browser's own zone. */
 
 /** Drop the keys with nothing in them, so `data` holds only what is known. */
 function prune(object) {
@@ -744,53 +812,18 @@ function prune(object) {
     value !== null && value !== undefined && value !== '' && !(Array.isArray(value) && !value.length)));
 }
 
+/** A dish name compared whatever the capitals and spaces. */
+const normDish = name => String(name).toLowerCase().replace(/\s+/g, ' ').trim();
+
 /** Same dish, whatever the capitals and spaces. */
-const sameDish = (a, b) =>
-  String(a).toLowerCase().replace(/\s+/g, ' ').trim() === String(b).toLowerCase().replace(/\s+/g, ' ').trim();
-
-function toggleItem(name) {
-  const index = draft.findIndex(i => sameDish(i.name, name));
-  if (index >= 0) draft.splice(index, 1);
-  else draft.push({ name, qty: 1 });
-}
-
-function paintOptions(filter) {
-  const list = document.getElementById('fb-options');
-  const label = document.getElementById('fb-toggle-label');
-  if (!list) return;
-
-  const needle = String(filter || '').trim().toLowerCase();
-  const dishes = dishCatalogue().filter(d => !needle || d.name.toLowerCase().includes(needle));
-
-  label.textContent = draft.length
-    ? `${draft.length} item${draft.length === 1 ? '' : 's'} selected`
-    : 'Choose dishes';
-
-  if (!dishes.length) {
-    list.innerHTML = `<p class="fb-none">${needle
-      ? 'Nothing matching — add it as something new below.'
-      : 'Nothing recorded yet. Add the first one below.'}</p>`;
-    return;
-  }
-
-  list.innerHTML = dishes.slice(0, 200).map(dish => {
-    const on = draft.some(i => sameDish(i.name, dish.name));
-    return `
-      <button type="button" class="fb-option ${on ? 'is-on' : ''}" data-name="${escapeHTML(dish.name)}"
-              aria-pressed="${on}">
-        <i class="fas ${on ? 'fa-square-check' : 'fa-square'}" aria-hidden="true"></i>
-        <span class="fb-option-name">${escapeHTML(dish.name)}</span>
-        <span class="fb-option-count mono">${dish.count}×</span>
-      </button>`;
-  }).join('');
-}
+const sameDish = (a, b) => normDish(a) === normDish(b);
 
 function paintBasket() {
   const list = document.getElementById('fb-list');
   if (!list) return;
 
   if (!draft.length) {
-    list.innerHTML = `<p class="fb-none">Nothing yet. Pick from the list above, or type it in.</p>`;
+    list.innerHTML = '';
     return;
   }
 
@@ -812,6 +845,41 @@ function paintBasket() {
         <i class="fas fa-times" aria-hidden="true"></i>
       </button>
     </li>`).join('')}</ul>`;
+}
+
+/**
+ * Bring a row into view and mark it for a moment — after a save, so the meal
+ * you just touched is in front of you instead of somewhere up the list.
+ */
+function revealEvent(id) {
+  if (!id) return;
+  const row = document.querySelector(`#fd-body [data-basket="${CSS.escape(id)}"]`);
+  if (row) flash(row, 'center');
+}
+
+function flash(element, block = 'start') {
+  const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  element.scrollIntoView({ block, behavior: still ? 'auto' : 'smooth' });
+  element.classList.remove('is-flash');
+  void element.offsetWidth;   // restart the animation on a second click
+  element.classList.add('is-flash');
+  setTimeout(() => element.classList.remove('is-flash'), 1800);
+}
+
+/**
+ * The chart's point → that day in the list. A week or month point lands on
+ * the latest day inside it (the list runs newest first, so that is the top of
+ * the stretch); a point with nothing recorded lands on the nearest day that has
+ * something.
+ */
+function scrollToDay(from, until) {
+  if (activeTab !== 'meals') switchTab('meals');
+  const sections = [...document.querySelectorAll('#fd-body [data-day]')];
+  if (!sections.length) return;
+  const inside = sections.filter(s => s.dataset.day >= from && s.dataset.day < until);
+  const distance = s => Math.abs(new Date(s.dataset.day) - new Date(from));
+  const target = inside[0] || sections.reduce((best, s) => (distance(s) < distance(best) ? s : best));
+  flash(target);
 }
 
 // ── Dishes ─────────────────────────────────────────────
@@ -1006,6 +1074,15 @@ function renderCalorieChart() {
     options: {
       responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
+      // A point is a way into the list: click a day and its meals come up.
+      onClick: (_e, elements) => {
+        const index = elements[0]?.index;
+        if (index === undefined) return;
+        scrollToDay(buckets[index].at, buckets[index + 1]?.at ?? '9999');
+      },
+      onHover: (e, elements) => {
+        if (e.native?.target) e.native.target.style.cursor = elements.length ? 'pointer' : 'default';
+      },
       plugins: {
         legend: { display: false },
         tooltip: {
