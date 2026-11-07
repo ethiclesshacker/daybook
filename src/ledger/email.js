@@ -52,10 +52,17 @@ const NEVER = [
   // restaurant, the order number and the amount, so left to the model it reads
   // as a meal — and spends a call to arrive there.
   /\bpayment\s+failed\b/i,
+  // Jio cutting a connection off for non-payment names the unpaid amount, and
+  // was filed as paying it. The real payment arrives as its own mail.
+  /\bservices?\s+barred\b/i,
   // A reminder is about something that has *not* happened. Recording it would
   // put a non-event in the ledger, and the real payment arrives by email later.
   /\b(payment\s+(overdue|due|reminder|pending)|overdue|due\s+(?:on|by|date)|pay\s+now|outstanding\s+(?:amount|balance)|renew(al)?\s+reminder|expiring\s+soon)\b/i,
 ];
+
+// Receipts for bills that are not yours to pay: the three CESC connections at
+// the family home in Kolkata reach this inbox but are not your spending.
+const NOT_MINE_SENDER = /^cesc\.receipts@cesc\.co\.in$/i;
 
 // Campaign language. Any of these and it is marketing, whatever else it says.
 const PROMOTIONAL = [
@@ -111,6 +118,8 @@ export function triage(message, ctx = {}) {
     ? { name: message.from.name, address: message.from.address }
     : parseAddress(message?.from);
   const address = (from.address || '').toLowerCase();
+
+  if (NOT_MINE_SENDER.test(address)) return { decision: 'reject', reason: 'not your bill', promotional: false, never: true };
 
   for (const re of NEVER) {
     if (re.test(subject)) return { decision: 'reject', reason: 'never-an-event subject', promotional: false, never: true };
@@ -1459,7 +1468,7 @@ const SENDER_RULES = [
  * pockets; the spends were counted when the card alerts arrived.
  */
 const CARD_BILL_TEXT = /\b(credit\s+card\s+bill\s+payment|bill\s+payment\s+successful|repayment\s+(?:is\s+)?successful|received\s+your\s+(?:credit\s+card\s+bill\s+)?payment|payment\s+of\s+\S+\s+towards\s+your\s+[\w\s]{0,40}credit\s+card|card\s+bill\s+paid)|ccbillpayment/i;
-const CARD_BILL_PAYEE = /^(?:cred|cred\s*club|cred\.club\S*|credccbillpayment|scapia\S*|scapiatechnolog\S*)$/i;
+const CARD_BILL_PAYEE = /^(?:cred|cred\s*club|cred\s+ccbp(?:\s+dc)?|cred\.club\S*|credccbillpayment|scapia\S*|scapiatechnolog\S*)$/i;
 export function isCardBillPayment(text, payees = []) {
   if (/\b(declined|failed|unsuccessful)\b/i.test(text || '')) return false;
   if (CARD_BILL_TEXT.test(text || '')) return true;

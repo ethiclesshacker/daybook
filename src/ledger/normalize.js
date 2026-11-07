@@ -465,6 +465,11 @@ export function entityRef(type, name, relationship = 'related', metadata = {}) {
 /** Pull a display name and address out of "Amazon.in <auto@amazon.in>". */
 export function parseAddress(raw) {
   if (!raw) return { name: null, address: null };
+  // Mail arrives with `from` already parsed. Stringified, one with no display
+  // name became the bank called "[object Object]".
+  if (typeof raw === 'object') {
+    return { name: raw.name || null, address: raw.address ? String(raw.address).toLowerCase() : null };
+  }
   const m = String(raw).match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
   if (m) return { name: m[1].trim() || null, address: m[2].trim().toLowerCase() };
   const bare = String(raw).trim();

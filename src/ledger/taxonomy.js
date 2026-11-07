@@ -275,7 +275,7 @@ export const TYPE_CATEGORIES = {
  */
 export const MERCHANT_CATEGORIES = [
   ['amazon pay', 'stored_value'], ['amazonpay', 'stored_value'], ['amazonpayindiaprivatet', 'stored_value'],
-  ['magicpin', 'stored_value'], ['samast', 'stored_value'], ['onpoint', 'stored_value'], ['gyftr', 'stored_value'],
+  ['magicpin', 'stored_value'], ['samast', 'stored_value'], ['razsamasttechnologiesp', 'stored_value'], ['onpoint', 'stored_value'], ['gyftr', 'stored_value'],
   ['anthropic', 'subscriptions'], ['claude', 'subscriptions'], ['openai', 'subscriptions'], ['cursor', 'subscriptions'],
   ['netflix', 'subscriptions'], ['spotify', 'subscriptions'], ['spotifyindia', 'subscriptions'], ['appleservices', 'subscriptions'],
   ['apple', 'subscriptions'], ['google', 'subscriptions'], ['microsoft', 'subscriptions'], ['narakeet', 'subscriptions'],
@@ -325,6 +325,7 @@ export const MERCHANT_CATEGORIES = [
   ['the souled store', 'clothing'], ['campus shoes', 'clothing'], ['neeman', 'clothing'], ['neemans', 'clothing'],
   ['moxie', 'personal_care'], ['metro wash', 'personal_care'], ['the metro wash', 'personal_care'],
   ['iitm', 'education'], ['indian institute of te', 'education'], ['coursera', 'education'], ['udemy', 'education'],
+  ['innovative retail', 'groceries'], ['purani dilli', 'dining'], ['little italy', 'dining'], ['the local diners', 'dining'],
   ['lively legacy', 'rent'], ['nobroker', 'rent'],
   ['groww', 'investments'], ['zerodha', 'investments'], ['hdfc securities', 'investments'], ['hdfcsecurities', 'investments'],
   ['kuvera', 'investments'], ['coin by zerodha', 'investments'],

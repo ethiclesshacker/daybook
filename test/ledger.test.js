@@ -404,13 +404,13 @@ test('a reference capture with no digits in it is rejected', () => {
   // "Mobile Payment Receipt" made the receipt-number pattern capture the word
   // "Payment", which became a dedupe key shared by every bill from that sender.
   const bill = extractDeterministic({
-    subject: 'CESC LTD - Mobile Payment Receipt',
+    subject: 'Tata Power - Mobile Payment Receipt',
     date: new Date('2026-07-31T04:45:00Z'),
-    from: { name: 'CESC Ltd', address: 'cesc.receipts@cesc.co.in' },
+    from: { name: 'Tata Power', address: 'receipts@tatapower.com' },
     text: 'Payment received. Consumer No: 123456789. Amount Paid Rs. 2,450.00. Receipt No: RCP889912', to,
   }, SELF).extractions[0];
 
-  assert.equal(bill.dedupe_key, 'invoice:cesc:rcp889912');
+  assert.match(bill.dedupe_key, /^invoice:.*:rcp889912$/);
   assert.equal(bill.data.amount, 2450);
 });
 
@@ -1404,4 +1404,37 @@ test('each "Counts as" answer writes values that give that answer back', async (
     const after = { type, subtype, data: { ...start.data, ...(direction ? { direction } : {}) } };
     assert.equal(countsAs(after), id, `${start.subtype} -> ${id}`);
   }
+});
+
+// ── Mail that is not spending ──────────────────────────
+
+test('a debit at CRED CCBP is a card bill, not a purchase', () => {
+  const [extraction] = extractDeterministic({
+    subject: 'View: Account update for your HDFC Bank A/c', date: new Date('2026-10-27T14:48:00Z'),
+    from: { name: 'HDFC Bank InstaAlerts', address: 'alerts@hdfcbank.bank.in' }, to,
+    text: 'Rs.248901.89 is debited from your HDFC Bank Debit Card ending 9266 at CRED CCBP DC on 27 Oct, 2026 at 20:18:45.',
+  }, SELF).extractions;
+  assert.equal(extraction.type, 'transfer');
+  assert.equal(extraction.subtype, 'card_bill_payment');
+  assert.equal(isInflow(extraction), true);
+});
+
+test('CESC receipts and Jio barring notices create no event', () => {
+  for (const message of [
+    { subject: 'Payment Receipts', from: { name: 'CESC', address: 'cesc.receipts@cesc.co.in' },
+      text: 'Transaction Successful Acknowledgement Slip. Amount Rs. 1290.00. Status of Payment SUCCESS' },
+    { subject: 'Services barred for JioAirFiber connection', from: { name: 'Jio', address: 'notifications_jiofiber@jio.com' },
+      text: 'Your services have been barred due to non-payment of Rs. 706.82 for bill dated 16-Oct-26.' },
+  ]) {
+    const result = extractDeterministic({ ...message, date: new Date('2026-11-02T08:00:00Z'), to }, SELF);
+    assert.equal(result.extractions.length, 0, message.subject);
+  }
+});
+
+test('a bank alert with no display name does not make a bank called [object Object]', () => {
+  const [extraction] = extractDeterministic({
+    subject: 'Alert', date: new Date('2026-10-27T14:51:00Z'), from: { address: 'alerts@hdfcbank.bank.in' }, to,
+    text: 'Rs.459.71 is debited from your account ending 9768 towards VPA someone@upi on 27-10-26.',
+  }, SELF).extractions;
+  assert.doesNotMatch(String(extraction.data.issuer), /object/i);
 });
