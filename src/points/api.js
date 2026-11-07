@@ -32,6 +32,13 @@ export const listRedemptions = () =>
 export const listRules = () =>
   read('rules', () => unwrap(supabase.from('cc_merchant_rules').select('*').order('uses', { ascending: false })));
 
+/**
+ * The card year holding `on` (a date), or the current one: its dates, spend,
+ * milestones and every year so far (cc_card_year in 0033_card_year.sql).
+ */
+export const cardYear = (on = null) =>
+  read(`year:${on ?? 'now'}`, () => rpc('cc_card_year', { p_on: on }));
+
 /** What never paired: typed rows without an alert, alerts without a row. */
 export const reconcile = () => read('reconcile', () => rpc('cc_reconcile'));
 

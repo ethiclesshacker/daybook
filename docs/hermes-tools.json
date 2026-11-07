@@ -3,7 +3,7 @@
     "type": "function",
     "function": {
       "name": "search_events",
-      "description": "Search the event ledger by text, type, entity, status and date range. The primary way to answer questions about what happened.",
+      "description": "Search the event ledger by text, type, entity, status and date range. The primary way to answer questions about what happened. When an event has display_title and merchant_label, those carry the user's own name for the merchant: say those, and treat data.merchant as the bank's spelling.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -47,6 +47,18 @@
           },
           "min_confidence": {
             "type": "number"
+          },
+          "card": {
+            "type": "string",
+            "description": "Last four digits of a card; only events on that card. Card names are not searchable text."
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "date",
+              "amount"
+            ],
+            "description": "Newest first by default; amount is largest first."
           },
           "limit": {
             "type": "integer",
@@ -1190,13 +1202,81 @@
     "type": "function",
     "function": {
       "name": "get_card_points",
-      "description": "Credit card reward points (HSBC TravelOne): current balance, lifetime accrued and redeemed, and for a period the spend, points earned, points per ₹100, a month-by-month split, top merchants and past redemptions. The balance is always lifetime; date_range only scopes the period figures. For what was bought, use search_events — this is the points view. Rows are now created automatically from card alerts: `assumed` counts rows whose label and multiplier were inferred from earlier spends at the same merchant and that he has not confirmed yet, so say the balance includes that many assumed points. range.work_spend is the part of the period spend he has marked as work. top_merchants are real merchants now, work or not.",
+      "description": "Credit card reward points (HSBC TravelOne): current balance, lifetime accrued and redeemed, and for a period the spend, points earned, points per ₹100, a month-by-month split, top merchants and past redemptions. The balance is always lifetime; date_range only scopes the period figures. For what was bought, use get_card_transactions; for milestones, get_card_year. This is the points view. Rows are now created automatically from card alerts: `assumed` counts rows whose label and multiplier were inferred from earlier spends at the same merchant and that he has not confirmed yet, so say the balance includes that many assumed points. range.work_spend is the part of the period spend he has marked as work. top_merchants are real merchants now, work or not.",
       "parameters": {
         "type": "object",
         "properties": {
           "date_range": {
             "type": "string",
             "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\"."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_card_year",
+      "description": "The HSBC TravelOne card year: its dates, days left, net spend, work spend, and progress to the two spend milestones (annual fee reversal and bonus points), with when each was reached. Use it for any question about milestones, the fee, the anniversary or \"how much have I spent this card year\". Pass `on` for an earlier year. HSBC decides what finally qualifies, so this is the ledger's tally, not the bank's.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "string",
+            "description": "Any YYYY-MM-DD in the card year you want. Omit for the current one."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_card_transactions",
+      "description": "One card's transactions in short rows, largest first by default, with net_spend and total for the whole match. The right tool for \"biggest spends on my card\" or \"what did I buy on HSBC\": it does the sorting, so do not page through search_events or Fold for this. Omit `card` for the HSBC TravelOne points card, where no date_range means the current card year and the totals match the Points page. Other cards take their last four digits and cover all history by default.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "card": {
+            "type": "string",
+            "description": "Last four digits. Omit for the points card."
+          },
+          "date_range": {
+            "type": "string",
+            "description": "today, yesterday, this week, last week, this month, last month, this year, \"last N days\", a single YYYY-MM-DD, or an explicit span \"YYYY-MM-DD..YYYY-MM-DD\"."
+          },
+          "query": {
+            "type": "string",
+            "description": "Matches his merchant name, the bank's name and the note."
+          },
+          "min_amount": {
+            "type": "number"
+          },
+          "is_work": {
+            "type": "boolean",
+            "description": "Points card only: true for work spend, false to leave it out."
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "amount",
+              "date"
+            ],
+            "default": "amount"
+          },
+          "ascending": {
+            "type": "boolean",
+            "default": false
+          },
+          "limit": {
+            "type": "integer",
+            "default": 25,
+            "description": "At most 200."
+          },
+          "offset": {
+            "type": "integer",
+            "default": 0
           }
         }
       }

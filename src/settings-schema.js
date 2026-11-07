@@ -100,7 +100,17 @@ export const SETTINGS_SCHEMA = {
   },
   cc_milestone_target: {
     type: 'number', default: 1200000, min: 0, step: 1000, group: 'Credit card',
-    label: 'Annual spend milestone', prefix: '₹', hint: 'Spend needed for the fee waiver / bonus.',
+    label: 'Bonus points milestone', prefix: '₹', hint: 'Card-year spend above this earns the bonus points.',
+  },
+  cc_fee_waiver_target: {
+    type: 'number', default: 800000, min: 0, step: 1000, group: 'Credit card',
+    label: 'Annual fee milestone', prefix: '₹', hint: 'Card-year spend above this reverses the annual fee.',
+  },
+  // The card year runs from this date and repeats every year (0033_card_year.sql).
+  cc_opened_on: {
+    type: 'string', default: '', group: 'Credit card',
+    label: 'Card opened on',
+    hint: 'YYYY-MM-DD. The spend milestones and the Points list follow the year that starts on this date.',
   },
   cc_reward_target_rate: {
     type: 'number', default: 8, min: 0, max: 100, step: 0.5, group: 'Credit card',

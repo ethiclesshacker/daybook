@@ -148,3 +148,13 @@ test('a value outside the taxonomy is refused with the valid ones listed', () =>
   // Tools without a vocabulary pass straight through.
   assert.deepEqual(validateArgs('search_events', { query: 'x' }), { query: 'x' });
 });
+
+test('the card tools read, and default to the points card', () => {
+  for (const name of ['get_card_year', 'get_card_transactions']) {
+    assert.equal(TOOLS[name].readOnly, true, name);
+    assert.ok(READ_ONLY_TOOLS.has(name), name);
+  }
+  const card = TOOLS.search_events.parameters.properties.card;
+  assert.match(card.description, /last four/i);
+  assert.deepEqual(TOOLS.get_card_transactions.parameters.properties.sort.enum, ['amount', 'date']);
+});
