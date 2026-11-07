@@ -670,8 +670,9 @@ function amountCell(t) {
 // ── Rules ──────────────────────────────────────────────
 //
 // This is the table to curate. A rule says: when the card alert names THIS
-// merchant, file it under THAT label at THIS multiplier. They were learned from
-// the rows typed by hand; editing one makes it yours and stops it being relearned.
+// merchant, file it under THAT label at THIS multiplier. With no rule, a spend
+// keeps the bank's name and takes its category's multiplier (0031). A rule is
+// only worth having when it says something different from that.
 
 function renderRulesTable() {
   const container = document.getElementById('pt-rules-table');
@@ -706,7 +707,7 @@ function renderRulesTable() {
     if (rule) openRuleForm(rule);
   };
   window.__ptRuleDelete = async (key) => {
-    if (!confirm('Delete this rule? New spends at this merchant will arrive under the bank\'s own name at 2×.')) return;
+    if (!confirm('Delete this rule? New spends at this merchant will arrive under the bank\'s own name, at the usual multiplier for their category: 4× travel, 0× fuel and tax, 2× otherwise.')) return;
     try {
       await api.deleteRule(decodeURIComponent(key));
     } catch (err) {
