@@ -736,6 +736,12 @@ export function comboboxHTML({ id, value = '', placeholder = '', options = [] })
     </div>`;
 }
 
+/** Replace what a combobox offers, for a list that depends on another field. */
+export function setComboboxOptions(id, options) {
+  const list = document.getElementById(`${id}-list`);
+  if (list) list.dataset.options = JSON.stringify(options);
+}
+
 /**
  * Wire one up. Safe to call on markup that is already wired — it is idempotent,
  * which matters because the points modal re-renders its body on a tab switch.
@@ -748,7 +754,6 @@ export function wireCombobox(id) {
 
   const wrap = input.closest('.cb');
   let options = [];
-  try { options = JSON.parse(list.dataset.options || '[]'); } catch { options = []; }
   let active = -1;
 
   const close = () => {
@@ -768,6 +773,9 @@ export function wireCombobox(id) {
    * match as "show everything" made typing `am` list all fifty merchants.
    */
   const paint = ({ whole = false } = {}) => {
+    // Read each time, not once: a list can depend on another field (a ledger
+    // event's subtypes follow its type), and setComboboxOptions changes it.
+    try { options = JSON.parse(list.dataset.options || '[]'); } catch { options = []; }
     const needle = input.value.trim().toLowerCase();
     const exact = whole && options.some(o => o.toLowerCase() === needle);
     const matches = (!needle || exact) ? options : options.filter(o => o.toLowerCase().includes(needle));
