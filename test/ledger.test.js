@@ -25,6 +25,7 @@ import {
   extractDeterministic, senderFingerprint, htmlToText, withKeys,
 } from '../src/ledger/email.js';
 import { parseOrderItems, summariseItems, dishName, mealTitle, retitleForItems } from '../src/ledger/items.js';
+import { collapseParcels, visibleEvents } from '../src/ledger/timeline.js';
 import { mealSlot } from '../src/ledger/taxonomy.js';
 import { parseQuickEntry, parseMealEntry, parseMealItems } from '../src/ledger/nlparse.js';
 import { buildDigest, isInflow } from '../src/ledger/summary.js';
@@ -1437,4 +1438,78 @@ test('a bank alert with no display name does not make a bank called [object Obje
     text: 'Rs.459.71 is debited from your account ending 9768 towards VPA someone@upi on 27-10-26.',
   }, SELF).extractions;
   assert.doesNotMatch(String(extraction.data.issuer), /object/i);
+});
+
+const parcel = (id, day, subtype, data, title = 'Parcel update') => ({
+  id, type: 'delivery', subtype, title, status: 'confirmed', occurred_at: `2026-10-${day}T10:00:00Z`, data,
+});
+
+test('the stages of one parcel draw as one row, the delivery if it came', () => {
+  const rows = collapseParcels([
+    parcel('late', '18', 'package', { merchant: 'Jagruk Journal' }),
+    parcel('done', '17', 'order_delivered', { merchant: 'Jagruk Journal' }),
+    parcel('out', '16', 'package', { carrier: 'shopifyemail', order_id: 'JJ-1', tracking_number: 'T1' }),
+    parcel('sent', '15', 'order_shipped', { merchant: 'Jagruk Journal', tracking_number: 'T1' }),
+  ]);
+  assert.deepEqual(rows.map(r => r.id), ['done']);
+  assert.equal(rows[0].parcel_updates, 4);
+});
+
+test('parcels with different numbers stay separate rows, even from one shop', () => {
+  const rows = collapseParcels([
+    parcel('a', '20', 'order_shipped', { carrier: 'amazon', order_id: '402-1' }),
+    parcel('b', '19', 'order_shipped', { carrier: 'amazon', order_id: '402-2' }),
+    parcel('c', '12', 'order_shipped', { carrier: 'hsbcindia' }),
+    parcel('d', '11', 'order_shipped', { carrier: 'hsbcindia' }),
+  ]);
+  assert.deepEqual(rows.map(r => r.id), ['a', 'b', 'c', 'd']);
+});
+
+test('one shop a month apart is two parcels', () => {
+  const later = parcel('new', '30', 'order_delivered', { merchant: 'Campus' });
+  const earlier = { ...parcel('old', '01', 'order_shipped', { merchant: 'Campus' }), occurred_at: '2026-08-01T10:00:00Z' };
+  assert.equal(collapseParcels([later, earlier]).length, 2);
+});
+
+test('a parcel waiting for review is not folded away', () => {
+  const rows = collapseParcels([
+    parcel('a', '20', 'order_delivered', { order_id: 'X1' }),
+    { ...parcel('b', '19', 'order_shipped', { order_id: 'X1' }), status: 'needs_review' },
+  ]);
+  assert.equal(rows.length, 2);
+});
+
+test('weigh-ins hide by default and come back when asked for', () => {
+  const weigh = { id: 'w', type: 'health', subtype: 'measurement', title: 'Weight 83 kg', status: 'confirmed', occurred_at: '2026-10-20T04:00:00Z', data: { metric: 'weight', value: 83 } };
+  const lab = { id: 'l', type: 'health', subtype: 'lab_test', title: 'Lipid panel', status: 'confirmed', occurred_at: '2026-10-19T04:00:00Z', data: {} };
+  const ids = options => visibleEvents([weigh, lab], options).map(e => e.id);
+  assert.deepEqual(ids({}), ['l']);
+  assert.deepEqual(ids({ showWeighIns: true }), ['w', 'l']);
+  assert.deepEqual(ids({ filters: { types: ['health'] } }), ['w', 'l']);
+  assert.deepEqual(ids({ filters: { query: 'weight' } }), ['w', 'l']);
+  assert.deepEqual(ids({ review: true }), ['w', 'l']);
+  assert.deepEqual(ids({ filters: { from: new Date() } }), ['l']);
+});
+
+test('parcel mails keep their order number and name who really sent them', () => {
+  const extract = (subject, address) => extractDeterministic({ subject, text: '', date: new Date('2026-10-15T09:00:00Z'), from: { name: 'Shop', address }, to }, SELF).extractions[0];
+  const partial = extract('Partial Order [21127551] Out for Delivery', 'connect@thesouledstore.com');
+  assert.equal(partial.data.order_id, '21127551');
+  assert.equal(partial.data.carrier, 'thesouledstore');
+
+  const shopify = extract('A shipment from order #NM22292114 is out for delivery', 'store+1@t.shopifyemail.com');
+  assert.equal(shopify.data.order_id, 'NM22292114');
+  assert.equal(shopify.data.carrier, 'shopifyemail');
+  assert.equal(shopify.data.merchant, undefined);
+  assert.doesNotMatch(shopify.title, /^Order\b/);
+
+  assert.equal(extract('Aditya, your CAMPUS order has been shipped.', 'info@net.shiprocket.in').data.carrier, 'shiprocket');
+  assert.equal(extract('Your order has been delivered', 'no-reply@scapia.cards').data.carrier, 'scapia');
+  assert.equal(extract('Your order has been delivered', 'orders@shop.co.in').data.carrier, 'shop');
+});
+
+test('a brand typed twice in a dish name is kept once', () => {
+  assert.equal(dishName("Haldiram's Haldiram's Mixture"), "Haldiram's Mixture");
+  assert.equal(dishName('idli idli'), 'Idli');
+  assert.equal(dishName('Cheese Masala Dosa'), 'Cheese Masala Dosa');
 });

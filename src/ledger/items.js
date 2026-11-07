@@ -242,6 +242,8 @@ export function dishName(text) {
   return String(text ?? '').replace(/\s+/g, ' ').trim()
     .split(' ')
     .map(word => (/[A-Z]/.test(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)))
+    // A brand typed in front of a name that already has it: "Haldiram's Haldiram's Mixture".
+    .filter((word, i, words) => !(word.length > 3 && word.toLowerCase() === words[i - 1]?.toLowerCase()))
     .join(' ')
     .slice(0, MAX_NAME);
 }
