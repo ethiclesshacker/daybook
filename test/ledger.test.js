@@ -25,7 +25,7 @@ import {
   extractDeterministic, senderFingerprint, htmlToText, withKeys,
 } from '../src/ledger/email.js';
 import { parseOrderItems, summariseItems, dishName, mealTitle, retitleForItems } from '../src/ledger/items.js';
-import { collapseParcels, visibleEvents } from '../src/ledger/timeline.js';
+import { collapseParcels, visibleEvents, eventTitle, eventMerchant } from '../src/ledger/timeline.js';
 import { mealSlot } from '../src/ledger/taxonomy.js';
 import { parseQuickEntry, parseMealEntry, parseMealItems } from '../src/ledger/nlparse.js';
 import { buildDigest, isInflow } from '../src/ledger/summary.js';
@@ -1518,4 +1518,25 @@ test('the home Jio connection is ignored, the Jio mobile is not', () => {
   const extract = (subject, address, text) => extractDeterministic({ subject, text, date: new Date('2026-10-25T06:47:00Z'), from: { name: 'Jio', address }, to }, SELF).extractions;
   assert.equal(extract('Payment received for JioAirFiber connection', 'notifications_jiofiber@jio.com', 'Payment of Rs. 706.82 for your JioHome connection has been received.').length, 0);
   assert.equal(triage({ subject: 'Payment received for Jio Number 9000000000', from: { address: 'notification@jio.com' }, text: 'Payment of Rs. 466.73 has been received.' }, SELF).reason === 'not your bill', false);
+});
+
+test('a row reads with your name for the merchant, and falls back to the bank', () => {
+  const named = { title: 'Vedant Fashions Limite — ₹31,998', display_title: 'Manyavar — ₹31,998', merchant_label: 'Manyavar', data: { merchant: 'Vedant Fashions Limite' } };
+  assert.equal(eventTitle(named), 'Manyavar — ₹31,998');
+  assert.equal(eventMerchant(named), 'Manyavar');
+  const plain = { title: 'Uber — ₹745', data: { merchant: 'Uber' } };
+  assert.equal(eventTitle(plain), 'Uber — ₹745');
+  assert.equal(eventMerchant(plain), 'Uber');
+  assert.equal(eventMerchant({ title: 'Walk', data: {} }), null);
+});
+
+test('the digest and its questions use your name for the merchant', () => {
+  const event = {
+    id: 'e1', type: 'purchase', subtype: 'card_transaction', status: 'confirmed', source_count: 1, occurred_at: '2026-11-01T06:00:00Z',
+    title: 'Vedant Fashions Limite — ₹31,998', display_title: 'Manyavar — ₹31,998', merchant_label: 'Manyavar',
+    data: { merchant: 'Vedant Fashions Limite', amount: 31998, currency: 'INR' },
+  };
+  const digest = JSON.stringify(buildDigest([event], { from: '2026-11-01', to: '2026-11-01' }));
+  assert.match(digest, /Manyavar/);
+  assert.doesNotMatch(digest, /Vedant/);
 });
