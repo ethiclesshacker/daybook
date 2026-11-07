@@ -15,6 +15,7 @@
 import { routeParams } from '../router.js';
 import { correctFacts, reviewFilters } from '../ledger/corrections.js';
 import * as api from '../ledger/api.js';
+import { COUNTS_AS, countsAs, countsAsChanges } from '../ledger/corrections.js';
 import { EVENT_TYPES, CATEGORIES, STATUSES, SOURCE_TYPES, SUBTYPES, typeMeta, statusMeta, sourceMeta, categoryMeta } from '../ledger/taxonomy.js';
 // import { parseQuickEntry } from '../ledger/nlparse.js';  // now loaded on demand, see loadParser()
 import { summariseItems } from '../ledger/items.js';
@@ -1169,6 +1170,9 @@ function openEdit(event) {
         <div class="form-group"><label class="form-label" for="lg-e-merchant">Merchant</label><input type="text" class="form-input" id="lg-e-merchant" value="${escapeHTML(facts.merchant ?? '')}" /></div>
         <div class="form-group"><label class="form-label" for="lg-e-restaurant">Restaurant / place eaten</label><input type="text" class="form-input" id="lg-e-restaurant" value="${escapeHTML(facts.restaurant ?? '')}" /></div>
       </div>
+      ${facts.amount !== undefined ? `<div class="form-group"><label class="form-label" for="lg-e-counts">Counts as</label>
+        <select class="form-select" id="lg-e-counts">${COUNTS_AS.map(c => `<option value="${c.id}" ${c.id === countsAs(event) ? 'selected' : ''}>${escapeHTML(c.label)}</option>`).join('')}</select>
+      </div>` : ''}
       <div class="form-group"><label class="form-label" for="lg-e-category">Category</label>
         <select class="form-select" id="lg-e-category"><option value="">Automatic</option>${CATEGORIES.map(c => `<option value="${c.id}" ${facts.category === c.id ? 'selected' : ''}>${escapeHTML(c.label)}</option>`).join('')}</select>
       </div>
@@ -1179,32 +1183,32 @@ function openEdit(event) {
           <input type="datetime-local" class="form-input" id="lg-e-when" value="${escapeHTML(toLocalInput(event.occurred_at))}" />
         </div>
         <div class="form-group">
-          <label class="form-label" for="lg-e-type">Type</label>
-          <select class="form-select" id="lg-e-type">
-            ${EVENT_TYPES.map(t => `<option value="${t.id}" ${t.id === event.type ? 'selected' : ''}>${escapeHTML(t.label)}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
           <label class="form-label" for="lg-e-title">Title</label>
           <input type="text" class="form-input" id="lg-e-title" value="${escapeHTML(event.title)}" />
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="lg-e-subtype">Subtype</label>
-          ${comboboxHTML({
-            id: 'lg-e-subtype',
-            value: event.subtype || '',
-            placeholder: 'optional',
-            options: knownSubtypes(event.type),
-          })}
         </div>
       </div>
       <div class="form-group">
         <label class="form-label" for="lg-e-desc">Description</label>
         <input type="text" class="form-input" id="lg-e-desc" value="${escapeHTML(event.description || '')}" />
       </div>
-      <details class="lg-advanced"><summary>Advanced facts (JSON)</summary>
+      <details class="lg-advanced"><summary>Advanced: type, subtype and facts</summary>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="lg-e-type">Type</label>
+            <select class="form-select" id="lg-e-type">
+              ${EVENT_TYPES.map(t => `<option value="${t.id}" ${t.id === event.type ? 'selected' : ''}>${escapeHTML(t.label)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="lg-e-subtype">Subtype</label>
+            ${comboboxHTML({
+              id: 'lg-e-subtype',
+              value: event.subtype || '',
+              placeholder: 'optional',
+              options: knownSubtypes(event.type),
+            })}
+          </div>
+        </div>
         <label class="sr-only" for="lg-e-data">All facts as JSON</label>
         <textarea class="form-input is-code" id="lg-e-data" rows="7" spellcheck="false">${escapeHTML(JSON.stringify(facts, null, 2))}</textarea>
         <p class="form-hint">Other receipt details are preserved. Fields you change above take precedence over this JSON.</p>
@@ -1247,16 +1251,24 @@ function openEdit(event) {
       return;
     }
 
+    // "Counts as" only speaks when it was changed, so an edit that leaves it
+    // alone cannot rewrite a type or subtype someone set by hand.
+    const choice = document.getElementById('lg-e-counts')?.value;
+    const counts = choice && choice !== countsAs(event) ? countsAsChanges(event, choice) : null;
+    if (counts?.direction) data.direction = counts.direction;
+    if (counts?.category === null && !edited.has('category')) delete data.category;
+    else if (counts?.category && !edited.has('category')) data.category = counts.category;
+
     const whenValue = document.getElementById('lg-e-when').value;
     await mutate(() => api.updateEvent(event.id, {
       occurred_at: whenValue ? new Date(whenValue).toISOString() : undefined,
-      type: document.getElementById('lg-e-type').value,
-      subtype: document.getElementById('lg-e-subtype').value.trim() || null,
+      type: counts?.type ?? document.getElementById('lg-e-type').value,
+      subtype: counts ? counts.subtype : (document.getElementById('lg-e-subtype').value.trim() || null),
       title: document.getElementById('lg-e-title').value.trim(),
       description: document.getElementById('lg-e-desc').value.trim() || null,
       status: document.getElementById('lg-e-status').value,
       data,
-      ...(edited.has('category') && !data.category ? { inference: { category_source: 'derived' } } : {}),
+      ...((edited.has('category') || counts) && !data.category ? { inference: { category_source: 'derived' } } : {}),
     }, { replaceData: true }), 'Saved.');
   });
 }

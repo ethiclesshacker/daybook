@@ -1380,3 +1380,28 @@ test('a title somebody chose survives an edit to the items', () => {
   // Unchanged items, unchanged title.
   assert.equal(retitleForItems({ type: 'food', title: 'Diet Coke', data: { items: coke } }, coke), null);
 });
+
+// ── Counts as ──────────────────────────────────────────
+
+test('"Counts as" reads the same rule the budget does', async () => {
+  const { countsAs } = await import('../src/ledger/corrections.js');
+  assert.equal(countsAs({ type: 'purchase', subtype: 'order', data: { amount: 10 } }), 'spend');
+  assert.equal(countsAs({ type: 'transfer', subtype: 'payment', data: { amount: 10, direction: 'debit' } }), 'spend');
+  assert.equal(countsAs({ type: 'transfer', subtype: 'salary', data: { amount: 10 } }), 'inflow');
+  assert.equal(countsAs({ type: 'transfer', subtype: 'self_transfer', data: { amount: 10, direction: 'debit' } }), 'moved');
+});
+
+test('each "Counts as" answer writes values that give that answer back', async () => {
+  const { countsAs, countsAsChanges, COUNTS_AS } = await import('../src/ledger/corrections.js');
+  const starts = [
+    { type: 'purchase', subtype: 'card_transaction', data: { amount: 10, direction: 'debit' } },
+    { type: 'transfer', subtype: 'payment', data: { amount: 10, direction: 'debit' } },
+    { type: 'transfer', subtype: 'salary', data: { amount: 10, direction: 'credit' } },
+    { type: 'transfer', subtype: 'self_transfer', data: { amount: 10, direction: 'credit' } },
+  ];
+  for (const start of starts) for (const { id } of COUNTS_AS) {
+    const { type, subtype, direction } = countsAsChanges(start, id);
+    const after = { type, subtype, data: { ...start.data, ...(direction ? { direction } : {}) } };
+    assert.equal(countsAs(after), id, `${start.subtype} -> ${id}`);
+  }
+});
