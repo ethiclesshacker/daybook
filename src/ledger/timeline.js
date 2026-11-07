@@ -9,6 +9,12 @@
 // A row with money on it or a question waiting is never folded away.
 // ======================================================
 
+/** The title to read: with your name for the merchant, where you have one (0032). */
+export const eventTitle = event => event.display_title || event.title;
+
+/** Your name for the merchant, else the bank's. */
+export const eventMerchant = event => event.merchant_label || event.data?.merchant || null;
+
 // A parcel's mails arrive within days. Past this, the same shop is a new order.
 const PARCEL_WINDOW_MS = 14 * 86_400_000;
 

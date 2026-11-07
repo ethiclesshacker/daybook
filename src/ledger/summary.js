@@ -13,6 +13,7 @@
 // quietly implies full coverage.
 // ======================================================
 
+import { eventTitle, eventMerchant } from './timeline.js';
 import { DEFAULT_TIME_ZONE, formatTime, localDateISO } from './dates.js';
 import { amountInr, formatMoney, normalizeName, prune } from './normalize.js';
 import { canonicalCategory, deriveCategory } from './taxonomy.js';
@@ -165,7 +166,7 @@ function describe(event) {
     subtype: event.subtype,
     // Extractor titles carry the receipt's paise ("Paakashala — ₹94.58"), which
     // the prose then quoted; every screen shows whole rupees.
-    title: typeof event.title === 'string' ? event.title.replace(/(₹\s?[\d,]+)\.\d{1,2}\b/g, '$1') : event.title,
+    title: typeof eventTitle(event) === 'string' ? eventTitle(event).replace(/(₹\s?[\d,]+)\.\d{1,2}\b/g, '$1') : event.title,
     // Whole rupees: the prose quoted "₹150.14" where every screen says ₹150.
     amount: Number.isFinite(Number(event.data?.amount)) ? Math.round(Number(event.data.amount)) : null,
     currency: event.data?.currency || null,
@@ -174,7 +175,7 @@ function describe(event) {
     confidence: event.confidence,
     // Only money has a spend category; a weigh-in is not "medical" spend.
     category: amountInr(event) === null ? null : spendCategory(event),
-    where: event.data?.place || event.data?.restaurant || event.data?.merchant || null,
+    where: event.data?.place || event.data?.restaurant || eventMerchant(event) || null,
     // A delivery app is how it arrived, not where it came from: IGP Cakes, via Zomato.
     via: event.data?.restaurant && event.data?.merchant && event.data.merchant !== event.data.restaurant
       ? event.data.merchant : null,
@@ -218,7 +219,7 @@ function openQuestions(events, needsReview, scheduled) {
         && event.source_count === 1 && !event.data?.order_id) {
       questions.push({
         event_id: event.id,
-        question: `What was the ${formatMoney(event.data?.amount, event.data?.currency)} charge at ${event.data?.merchant || 'an unknown merchant'} for?`,
+        question: `What was the ${formatMoney(event.data?.amount, event.data?.currency)} charge at ${eventMerchant(event) || 'an unknown merchant'} for?`,
         why: 'only a card alert; no order or receipt matched it',
       });
     }

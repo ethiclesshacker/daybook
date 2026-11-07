@@ -735,6 +735,8 @@ function openRuleForm(rule) {
       </div>
       <label class="pt-check"><input type="checkbox" id="pt-r-work" ${rule.is_work ? 'checked' : ''} />
         <span>Spends here are work <span class="pt-check-hint">tick only if nearly all of them are; you can always tick one row</span></span></label>
+      <label class="pt-check"><input type="checkbox" id="pt-r-everywhere" ${rule.names_everywhere === false ? '' : 'checked'} />
+        <span>Use this name in the Ledger, on every card <span class="pt-check-hint">untick if this card's spends here are not typical, like Zomato and District</span></span></label>
       <label class="pt-check"><input type="checkbox" id="pt-r-apply" checked />
         <span>Also apply to rows at this merchant that are still assumed</span></label>`,
     footer: `
@@ -751,7 +753,7 @@ function openRuleForm(rule) {
     await withBusy(document.getElementById('pt-rule-submit'), 'Saving…', async () => {
       try {
         await api.updateRule(rule.merchant_key, {
-          label, multiplier, is_work: isWork, source: 'manual', ambiguous: false, updated_at: new Date().toISOString(),
+          label, multiplier, is_work: isWork, names_everywhere: Boolean(document.getElementById('pt-r-everywhere').checked), source: 'manual', ambiguous: false, updated_at: new Date().toISOString(),
         });
 
         if (document.getElementById('pt-r-apply').checked) {

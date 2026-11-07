@@ -169,7 +169,7 @@ const DATE_RANGE = {
 export const TOOLS = {
   search_events: {
     readOnly: true,
-    description: 'Search the event ledger by text, type, entity, status and date range. The primary way to answer questions about what happened.',
+    description: 'Search the event ledger by text, type, entity, status and date range. The primary way to answer questions about what happened. When an event has display_title and merchant_label, those carry the user\'s own name for the merchant: say those, and treat data.merchant as the bank\'s spelling.',
     parameters: {
       type: 'object',
       properties: {
@@ -1697,7 +1697,7 @@ async function findFoodEvent(args, userId) {
   const result = await searchEvents(userId, { p_types: ['food'], p_from: from, p_to: to, p_limit: 100 });
   const needle = normalizeName(args.match ?? '');
   const hits = (result?.events || []).filter(e => e.status !== 'dismissed' && (!needle || normalizeName([
-    e.title, e.data?.restaurant, e.data?.merchant, ...(e.data?.items ?? []).map(i => i.name),
+    e.title, e.display_title, e.merchant_label, e.data?.restaurant, e.data?.merchant, ...(e.data?.items ?? []).map(i => i.name),
   ].filter(Boolean).join(' ')).includes(needle)));
   if (!hits.length) {
     throw new Error(`No food event${args.match ? ` mentioning "${args.match}"` : ''} in that range. Widen date_range or pass event_id.`);

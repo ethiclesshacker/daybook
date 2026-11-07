@@ -19,7 +19,7 @@ import { COUNTS_AS, countsAs, countsAsChanges } from '../ledger/corrections.js';
 import { EVENT_TYPES, CATEGORIES, STATUSES, SOURCE_TYPES, SUBTYPES, typeMeta, statusMeta, sourceMeta, categoryMeta } from '../ledger/taxonomy.js';
 // import { parseQuickEntry } from '../ledger/nlparse.js';  // now loaded on demand, see loadParser()
 import { summariseItems } from '../ledger/items.js';
-import { visibleEvents } from '../ledger/timeline.js';
+import { visibleEvents, eventTitle, eventMerchant } from '../ledger/timeline.js';
 import { localDateISO, amountInr } from '../ledger/normalize.js';
 import { formatTime as fmtTime, formatDayHeading, toLocalInput, dayStartISO, shiftISO } from '../ledger/dates.js';
 import { isInflow, moneyFlow } from '../ledger/summary.js';
@@ -589,8 +589,8 @@ function renderRow(event) {
   // day and can actually be compared.
   const bits = [];
   if (event.data?.origin && event.data?.destination) bits.push(`${event.data.origin} → ${event.data.destination}`);
-  const where = event.data?.restaurant || event.data?.merchant || event.data?.place;
-  if (where && !event.title.includes(where)) bits.push(where);
+  const where = event.data?.restaurant || eventMerchant(event) || event.data?.place;
+  if (where && !eventTitle(event).includes(where)) bits.push(where);
   // "Parcel dispatched" says nothing about whose parcel without the sender.
   if (event.type === 'delivery' && !where && event.data?.carrier) bits.push(event.data.carrier);
   if (event.parcel_updates) bits.push(`${event.parcel_updates} updates`);
@@ -609,7 +609,7 @@ function renderRow(event) {
   // instead, and only the genuinely uncertain get a badge.
   const uncertain = event.status === 'inferred';
 
-  const title = stripTrailingAmount(event.title);
+  const title = stripTrailingAmount(eventTitle(event));
   // Money rows say what the money was for ("Purchase · Travel"), which is the
   // question a row answers; the subtype ("card transaction") says how it was paid.
   const spendFor = amountInr(event) !== null && moneyFlow(event) === 'spend' && event.category && event.category !== 'other'
@@ -619,7 +619,7 @@ function renderRow(event) {
   return `
     <article class="tl-item ${needsReview ? 'is-review' : ''} ${uncertain ? 'is-inferred' : ''}"
              data-id="${escapeHTML(event.id)}" ${activeTab === 'review' ? '' : 'role="button" tabindex="0"'}
-             aria-label="${escapeHTML(event.title)}">
+             aria-label="${escapeHTML(eventTitle(event))}">
       <div class="tl-when">
         <span class="tl-time mono">${escapeHTML(formatTime(event.occurred_at))}</span>
         <span class="tl-src" title="From ${escapeHTML(source.label)}${event.source_count > 1 ? ` · ${event.source_count} sources agree` : ''}">
@@ -719,7 +719,7 @@ async function openDetail(eventId) {
   const needsAttention = event.status === 'needs_review' || event.status === 'inferred';
 
   openModal({
-    title: stripTrailingAmount(event.title),
+    title: stripTrailingAmount(eventTitle(event)),
     icon: type.icon, iconColor: type.color,
     body: `
       <div class="lg-detail-head">
@@ -1369,9 +1369,9 @@ function exportLedger() {
     downloadCSV(
       ['Occurred at', 'Type', 'Subtype', 'Title', 'Amount', 'Currency', 'Where', 'Status', 'Confidence', 'Source', 'Sources', 'Event ID'],
       events.map(event => [
-        event.occurred_at, event.type, event.subtype || '', event.title,
+        event.occurred_at, event.type, event.subtype || '', eventTitle(event),
         event.data?.amount ?? '', event.data?.currency ?? '',
-        event.data?.restaurant || event.data?.merchant || event.data?.place || '',
+        event.data?.restaurant || eventMerchant(event) || event.data?.place || '',
         event.status, event.confidence ?? '', event.source_type, event.source_count, event.id,
       ]),
       `ledger-${todayISO()}.csv`);
