@@ -3974,6 +3974,11 @@ input, select, textarea {
    right-aligned over the digits. */
 .dt-table th[data-align="end"] .dt-sort { flex-direction: row; justify-content: flex-end; }
 
+/* A stacked label takes the width of its longest word, one word per line. */
+.dt-table th[data-stack] { white-space: normal; }
+.dt-table th[data-stack] .dt-sort span { width: min-content; text-align: inherit; line-height: 1.25; }
+.dt-table th[data-stack][data-align="end"] .dt-sort span { text-align: right; }
+
 /* ---------- Reconcile: the collapsed list says it opens ---------- */
 .pt-rc-details > summary { list-style: none; }
 .pt-rc-details > summary::-webkit-details-marker { display: none; }

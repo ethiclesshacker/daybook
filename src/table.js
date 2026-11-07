@@ -19,6 +19,9 @@
 // 0 or missing — a Mutual Funds column of ₹0 down every snapshot is width
 // spent saying nothing.
 //
+// A column with `stackLabel: true` puts each word of its label on its own line,
+// for a table that has to give up header height to fit its columns.
+//
 // The rules themselves live in table-core.js.
 // ======================================================
 
@@ -73,7 +76,7 @@ export function createTable(container, {
     return shown.map(c => {
       const active = state.sort?.key === c.key;
       const ariaSort = active ? (state.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none';
-      const attrs = `scope="col"${c.align === 'end' ? ' data-align="end"' : ''}${c.sortable ? ` aria-sort="${ariaSort}"` : ''}`;
+      const attrs = `scope="col"${c.align === 'end' ? ' data-align="end"' : ''}${c.stackLabel ? ' data-stack' : ''}${c.sortable ? ` aria-sort="${ariaSort}"` : ''}`;
       if (!c.sortable) {
         return `<th ${attrs}>${c.actions ? `<span class="sr-only">${escapeHTML(c.label)}</span>` : escapeHTML(c.label)}</th>`;
       }

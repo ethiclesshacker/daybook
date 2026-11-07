@@ -294,7 +294,7 @@ function renderTable() {
   const tableFormat = inrColumnFormatter(Object.values(MONEY_COLUMNS).flatMap(value => allRows.map(value)));
   for (const key of Object.keys(MONEY_COLUMNS)) columnFormat[key] = tableFormat;
   const money = (key, label, opts) => ({
-    key, label, type: 'number', align: 'end', value: MONEY_COLUMNS[key], hideWhenEmpty: true,
+    key, label, type: 'number', align: 'end', value: MONEY_COLUMNS[key], hideWhenEmpty: true, stackLabel: label.includes(' '),
     render: r => numCell(columnFormat[key](MONEY_COLUMNS[key](r)), opts),
   });
   table ??= createTable(container, {
