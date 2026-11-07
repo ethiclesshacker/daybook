@@ -1513,3 +1513,9 @@ test('a brand typed twice in a dish name is kept once', () => {
   assert.equal(dishName('idli idli'), 'Idli');
   assert.equal(dishName('Cheese Masala Dosa'), 'Cheese Masala Dosa');
 });
+
+test('the home Jio connection is ignored, the Jio mobile is not', () => {
+  const extract = (subject, address, text) => extractDeterministic({ subject, text, date: new Date('2026-10-25T06:47:00Z'), from: { name: 'Jio', address }, to }, SELF).extractions;
+  assert.equal(extract('Payment received for JioAirFiber connection', 'notifications_jiofiber@jio.com', 'Payment of Rs. 706.82 for your JioHome connection has been received.').length, 0);
+  assert.equal(triage({ subject: 'Payment received for Jio Number 9000000000', from: { address: 'notification@jio.com' }, text: 'Payment of Rs. 466.73 has been received.' }, SELF).reason === 'not your bill', false);
+});
