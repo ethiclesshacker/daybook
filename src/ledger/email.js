@@ -64,6 +64,29 @@ const NEVER = [
 // the family home in Kolkata reach this inbox but are not your spending.
 const NOT_MINE_SENDER = /^cesc\.receipts@cesc\.co\.in$/i;
 
+/**
+ * The order a parcel mail is about, as a mail subject or body writes it:
+ * "Order ID: 21127551", "Partial Order [21127551]", "from order #JJ-23425".
+ * Every stage of one parcel has to yield the same number, because that number
+ * is what lets the timeline show them as one row.
+ */
+export function parcelOrderId(text) {
+  return matchReference(text, /\border\s*(?:id|no\.?|#)\s*[:#-]?\s*([A-Za-z0-9-]{5,24})\b/i)
+      || matchReference(text, /\border\s*\[\s*([A-Za-z0-9-]{5,24})\s*\]/i)
+      || matchReference(text, /\bfrom\s+order\s+#?([A-Za-z0-9-]{5,24})\b/i);
+}
+
+/**
+ * Who sent a parcel mail, named by the sender's domain and not its first label:
+ * info@net.shiprocket.in is shiprocket, where the first label said "net".
+ */
+export function parcelCarrier(address) {
+  const labels = String(address || '').split('@')[1]?.toLowerCase().split('.').filter(Boolean) || [];
+  if (labels.length > 1) labels.pop();
+  if (labels.length > 1 && /^(co|com|net|org)$/.test(labels[labels.length - 1])) labels.pop();
+  return labels[labels.length - 1] || null;
+}
+
 // Campaign language. Any of these and it is marketing, whatever else it says.
 const PROMOTIONAL = [
   /\b(\d{1,3}\s*%\s*off|flat\s+\d+|up\s+to\s+\d+\s*%|save\s+(big|up\s+to)|discount|coupon|promo\s*code)\b/i,
@@ -1074,11 +1097,13 @@ const SENDER_RULES = [
       // "<Name>, your CAMPUS order is out for delivery" → CAMPUS
       const brandMatch = subject.match(/\byour\s+([A-Z][A-Za-z0-9&.' -]{1,30}?)\s+(?:order|parcel|shipment|package)\b/)
                       || subject.match(/\b(?:order|parcel|shipment)\s+from\s+([A-Za-z0-9][A-Za-z0-9&.' -]{1,30}?)\b/i);
-      const brand = brandMatch ? canonicalMerchant(brandMatch[1].trim()) : null;
+      // "A shipment from order #NM222" names no brand: the word after "from" is
+      // just "order", and it was being kept as a merchant called Order.
+      const brand = brandMatch && !/^order$/i.test(brandMatch[1].trim()) ? canonicalMerchant(brandMatch[1].trim()) : null;
 
       const body = `${subject}\n${m.text || ''}`;
       const tracking = matchReference(body, /\b(?:awb|tracking|consignment)\s*(?:no\.?|number|id)?\s*[:#-]?\s*([A-Za-z0-9]{8,24})\b/i);
-      const orderId = matchReference(body, /\border\s*(?:id|no\.?|#)\s*[:#-]?\s*([A-Za-z0-9-]{5,24})\b/i);
+      const orderId = parcelOrderId(body);
 
       return withKeys({
         type: 'delivery',
@@ -1087,7 +1112,7 @@ const SENDER_RULES = [
         occurred_at: new Date(m.date).toISOString(),
         data: prune({
           merchant: brand?.name || null,
-          carrier: (m.from?.address || '').split('@')[1]?.split('.')[0] || null,
+          carrier: parcelCarrier(m.from?.address),
           tracking_number: tracking,
           order_id: orderId,
         }),

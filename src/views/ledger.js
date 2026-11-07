@@ -19,6 +19,7 @@ import { COUNTS_AS, countsAs, countsAsChanges } from '../ledger/corrections.js';
 import { EVENT_TYPES, CATEGORIES, STATUSES, SOURCE_TYPES, SUBTYPES, typeMeta, statusMeta, sourceMeta, categoryMeta } from '../ledger/taxonomy.js';
 // import { parseQuickEntry } from '../ledger/nlparse.js';  // now loaded on demand, see loadParser()
 import { summariseItems } from '../ledger/items.js';
+import { visibleEvents } from '../ledger/timeline.js';
 import { localDateISO, amountInr } from '../ledger/normalize.js';
 import { formatTime as fmtTime, formatDayHeading, toLocalInput, dayStartISO, shiftISO } from '../ledger/dates.js';
 import { isInflow, moneyFlow } from '../ledger/summary.js';
@@ -43,6 +44,8 @@ let summaries = {};
 let total = 0;
 let activeTab = 'timeline';       // timeline | review
 let filters = { query: '', types: [], statuses: [], sourceTypes: [], from: null, to: null };
+// Weigh-ins live on Health. They stay out of the timeline unless asked for here.
+let showWeighIns = false;
 let searchDebounce = null;
 // A load that resolves after the user has left must not paint a dead DOM.
 let loadToken = 0;
@@ -130,6 +133,10 @@ export async function renderLedger(container) {
                   <span>To</span>
                   <input type="date" class="form-input lg-filter" id="lg-filter-to" />
                 </label>
+                <label class="form-label form-check">
+                  <input type="checkbox" id="lg-show-weighins" />
+                  <span>Show weigh-ins</span>
+                </label>
                 <button type="button" class="btn-sm btn-ghost" id="lg-clear-filters">Clear all</button>
               </div>
             </details>
@@ -164,8 +171,18 @@ export async function renderLedger(container) {
   document.getElementById('lg-clear-filters').addEventListener('click', () => {
     document.querySelectorAll('.lg-filter').forEach(el => { el.value = ''; });
     filters = { ...filters, types: [], statuses: [], sourceTypes: [], from: null, to: null };
+    showWeighIns = false;
+    document.getElementById('lg-show-weighins').checked = false;
     reflectFilterCount();
     loadData();
+  });
+
+  // Drawn from what is already loaded, so this needs no trip to the server.
+  const weighIns = document.getElementById('lg-show-weighins');
+  weighIns.checked = showWeighIns;
+  weighIns.addEventListener('change', () => {
+    showWeighIns = weighIns.checked;
+    renderTimeline();
   });
 
   document.querySelectorAll('.lg-filter').forEach(el => el.addEventListener('change', () => {
@@ -410,9 +427,16 @@ function renderTimeline() {
     return;
   }
   const truncated = total > events.length;
+  // `events` stays everything loaded, so Load more still counts from the right
+  // place when some of those rows are folded away here.
+  const shown = visibleEvents(events, { filters, showWeighIns, review: activeTab === 'review' });
+  if (!shown.length && !truncated) {
+    container.innerHTML = emptyState({ icon: 'fa-filter-circle-xmark', title: 'Only weigh-ins here.', hint: 'Turn on Show weigh-ins in Filter to see them.' });
+    return;
+  }
 
   const days = new Map();
-  for (const event of events) {
+  for (const event of shown) {
     const day = localDateISO(event.occurred_at, timeZone());
     if (!days.has(day)) days.set(day, []);
     days.get(day).push(event);
@@ -567,6 +591,9 @@ function renderRow(event) {
   if (event.data?.origin && event.data?.destination) bits.push(`${event.data.origin} → ${event.data.destination}`);
   const where = event.data?.restaurant || event.data?.merchant || event.data?.place;
   if (where && !event.title.includes(where)) bits.push(where);
+  // "Parcel dispatched" says nothing about whose parcel without the sender.
+  if (event.type === 'delivery' && !where && event.data?.carrier) bits.push(event.data.carrier);
+  if (event.parcel_updates) bits.push(`${event.parcel_updates} updates`);
   // What was in the order, when the receipt listed it. On a food row this is
   // the line worth reading: "Kapoor's Cafe" is where, "Matar Paneer Mini
   // Thali" is what actually happened.
