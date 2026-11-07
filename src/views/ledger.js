@@ -24,7 +24,7 @@ import { isInflow, moneyFlow } from '../ledger/summary.js';
 import * as settings from '../settings.js';
 import {
   escapeHTML, formatINRFull, formatMoney, isINR, openModal, closeModal, showToast, todayISO, downloadCSV, downloadBlob,
-  comboboxHTML, wireCombobox, renderKpiCards, emptyState, safeHttpUrl, timeAgo,
+  comboboxHTML, wireCombobox, setComboboxOptions, renderKpiCards, emptyState, safeHttpUrl, timeAgo,
 } from '../utils.js';
 
 // The sentence parser is 1,100 lines of rules that only the quick-add dialog
@@ -1222,6 +1222,15 @@ function openEdit(event) {
   });
 
   wireCombobox('lg-e-subtype');
+  // The subtypes belong to the type. Offering the old type's list after a change
+  // is how a self transfer got saved as `payment`, which counts as spending:
+  // a purchase has no `self_transfer` to pick.
+  document.getElementById('lg-e-type').addEventListener('change', (e) => {
+    const options = knownSubtypes(e.target.value);
+    const subtype = document.getElementById('lg-e-subtype');
+    setComboboxOptions('lg-e-subtype', options);
+    if (!options.includes(subtype.value.trim())) subtype.value = '';
+  });
   wireCopyButtons();
   for (const key of ['amount', 'currency', 'merchant', 'restaurant', 'category']) document.getElementById('lg-e-' + key).addEventListener('input', () => edited.add(key));
 

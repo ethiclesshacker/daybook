@@ -757,6 +757,37 @@ test('a self-transfer is not a purchase', () => {
   assert.equal(isInflow(extraction), true);        // kept out of spend totals
 });
 
+const HDFC = { name: 'HDFC Bank InstaAlerts', address: 'alerts@hdfcbank.bank.in' };
+const RTGS_SENT = "Dear Customer,\n\nYou have successfully initiated RTGS transaction of Rs. 613786.38 from your HDFC Bank A/c XX9768 "
+  + "for a transfer to payee Aditya Vikram Singhania8409 using HDFC Bank Online Banking.\n\nNot you? Call 18002586161/SMS 'BLOCK OB' to 7308080808";
+const RTGS_DONE = 'Dear Customer,\n\nImportant Note: Your RTGS transfer has been completed successfully.\n\n'
+  + 'Transaction Details:\n\nAmount: INR 6,13,786.38\nCredited to beneficiary A/c ending: XX8409\nUTR: HDFCR52026110783327520';
+const hdfc = (text, ctx = {}) => extractDeterministic({
+  subject: 'View: Account update for your HDFC Bank A/c', date: new Date('2026-11-06T20:29:28Z'), from: HDFC, to, text,
+}, { ...SELF, ...ctx }).extractions[0];
+
+test('an RTGS to your own account is a self-transfer, not ₹6 L of spending', () => {
+  const extraction = hdfc(RTGS_SENT, { selfIdentifiers: ['Aditya Vikram Singhania'] });
+  assert.equal(extraction.type, 'transfer');
+  assert.equal(extraction.subtype, 'self_transfer');
+  assert.equal(isInflow(extraction), true);
+});
+
+test('an RTGS to someone else stays spending, and names them', () => {
+  const extraction = hdfc(RTGS_SENT.replace('Aditya Vikram Singhania8409', 'Lively Legacy'), { selfIdentifiers: ['Aditya Vikram Singhania'] });
+  assert.equal(extraction.type, 'purchase');
+  assert.match(extraction.data.merchant, /lively legacy/i);
+  assert.equal(isInflow(extraction), false);
+});
+
+test('the bank confirming your transfer landed is neither income nor a second spend', () => {
+  const extraction = hdfc(RTGS_DONE);
+  assert.equal(extraction.type, 'transfer');
+  assert.equal(extraction.subtype, 'bank_transfer');
+  assert.equal(extraction.data.direction, 'debit');
+  assert.equal(moneyFlow(extraction), null);
+});
+
 test('a UPI payee is read from the VPA name', () => {
   // The card-descriptor pattern cannot cross the '@' in a handle, so on UPI
   // alerts it captures "VPA uber" or nothing at all.

@@ -1113,7 +1113,8 @@ const SENDER_RULES = [
       // event with the opposite sign, not a purchase. Recording it as one
       // would quietly inflate every spend total.
       const credit = /\b(credited|credit\s+of|received\s+(?:a\s+)?credits?|refund(?:ed)?|added\s+to)\b/i.test(text)
-                  && !/\bdebited\b/i.test(text);
+                  && !/\bdebited\b/i.test(text)
+                  && !/\bcredited\s+to\s+beneficiary\b/i.test(text);
 
       // "towards VPA uber@icici (UBER INDIA)" names the payee twice, as a
       // handle and as a person or business. Parsed first because it is the
@@ -1127,7 +1128,16 @@ const SENDER_RULES = [
       // into " on 18/08/26", which a greedy capture swallows into the name.
       const at = text.match(
         /\b(?:at|to|towards|in favou?r of)\s+([A-Z0-9][A-Za-z0-9 .&'*-]{1,40}?)(?=\s*(?:[.,;!|\n]|\bon\b\s*\d|\bwith\b|\bfor\b|\bavailable\b|$))/);
-      const payeeRaw = at ? at[1].replace(/\s+on$/i, '').trim() : null;
+      // HDFC's netbanking notice: "for a transfer to payee ADITYA VIKRAM SINGHANIA8409
+      // using HDFC Bank Online Banking." The lowercase "payee" defeats the pattern
+      // above, which then finds the "to 7308080808" in the SMS-to-block footer.
+      const namedPayee = text.match(/\btransfer\s+to\s+payee\s+(.{2,60}?)(?=\s+using\b|\s*[.,;\n]|$)/i);
+      const payeeRaw = namedPayee ? namedPayee[1].trim() : at ? at[1].replace(/\s+on$/i, '').trim() : null;
+
+      // "Credited to beneficiary A/c ending XX8409" is the bank confirming money
+      // you sent has landed. It reads like a credit and is not one: filed as
+      // income, a ₹6.1 L move between your own accounts became ₹6.1 L of income.
+      const sentNotice = /\bcredited\s+to\s+beneficiary\b/i.test(text);
 
       // Moving money between your own accounts is not spending. Left as a
       // purchase it shows up in the timeline as a shop you never visited, and
@@ -1152,20 +1162,23 @@ const SENDER_RULES = [
       // The subtype stays `card_transaction`: it is still how this was seen,
       // and the merge rules use exactly that value to let a restaurant's own
       // receipt take over the description when one arrives later.
-      const cardBill = !credit && !selfTransfer && isCardBillPayment(`${m.subject || ''}\n${text}`, [payee, vpaHandle]);
-      const food = !credit && !selfTransfer && !cardBill && isFoodMerchant(merchant, ctx.foodMerchants);
+      const cardBill = !credit && !selfTransfer && !sentNotice && isCardBillPayment(`${m.subject || ''}\n${text}`, [payee, vpaHandle]);
+      const food = !credit && !selfTransfer && !cardBill && !sentNotice && isFoodMerchant(merchant, ctx.foodMerchants);
 
       return withKeys({
         // Neither a credit nor a self-transfer is a purchase. Filing either as
         // one adds it to every spend total, so both become transfers. Nor is
         // paying a card's bill: its purchases were already counted one by one.
-        type: (credit || selfTransfer || cardBill) ? 'transfer' : food ? 'food' : 'purchase',
+        type: (credit || selfTransfer || cardBill || sentNotice) ? 'transfer' : food ? 'food' : 'purchase',
         subtype: selfTransfer ? 'self_transfer'
+               : sentNotice ? 'bank_transfer'
                : cardBill ? 'card_bill_payment'
                : credit ? (/\brefund/i.test(text) ? 'refund' : 'credit')
                : 'card_transaction',
         title: selfTransfer
           ? `Transfer to own account — ${formatMoney(money.amount, money.currency)}`
+          : sentNotice
+            ? `Transfer completed — ${formatMoney(money.amount, money.currency)}`
           : cardBill
             ? `Card bill payment — ${formatMoney(money.amount, money.currency)}`
           : credit
@@ -1173,7 +1186,7 @@ const SENDER_RULES = [
             : `${merchant?.name || 'Card transaction'} — ${formatMoney(money.amount, money.currency)}`,
         occurred_at: occurred,
         data: prune({
-          merchant: selfTransfer ? null : (merchant?.name || null),
+          merchant: (selfTransfer || sentNotice) ? null : (merchant?.name || null),
           amount: money.amount, currency: money.currency,
           direction: credit ? 'credit' : 'debit',
           vpa: vpaHandle,
@@ -1186,7 +1199,7 @@ const SENDER_RULES = [
         }),
         entities: [
           // A self-transfer has no merchant to remember.
-          selfTransfer ? null : entityRef(merchant?.type || 'merchant', merchant?.name, 'merchant'),
+          (selfTransfer || sentNotice) ? null : entityRef(merchant?.type || 'merchant', merchant?.name, 'merchant'),
           // `issuer`, not `provider`: the bank is where the money came from,
           // not where it went. Linked as a provider it collects the amount of
           // every transaction on the card and shows up as the biggest merchant
