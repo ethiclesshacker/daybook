@@ -61,8 +61,10 @@ const NEVER = [
 ];
 
 // Receipts for bills that are not yours to pay: the three CESC connections at
-// the family home in Kolkata reach this inbox but are not your spending.
-const NOT_MINE_SENDER = /^cesc\.receipts@cesc\.co\.in$/i;
+// the family home in Kolkata reach this inbox but are not your spending. Nor is
+// that home's Jio connection, since you stopped paying it around April 2026. If
+// you pay it again, the card or bank alert still records the money.
+const NOT_MINE_SENDER = /^(?:cesc\.receipts@cesc\.co\.in|notifications_jiofiber@jio\.com)$/i;
 
 /**
  * The order a parcel mail is about, as a mail subject or body writes it:
