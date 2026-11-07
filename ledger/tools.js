@@ -181,6 +181,8 @@ export const TOOLS = {
         entity_name: { type: 'string', description: 'Restrict to events linked to this merchant/person/place.' },
         date_range: DATE_RANGE,
         min_confidence: { type: 'number' },
+        card: { type: 'string', description: 'Last four digits of a card; only events on that card. Card names are not searchable text.' },
+        sort: { type: 'string', enum: ['date', 'amount'], description: 'Newest first by default; amount is largest first.' },
         limit: { type: 'integer', default: 50 },
         offset: { type: 'integer', default: 0 },
       },
@@ -194,6 +196,7 @@ export const TOOLS = {
         p_from: from, p_to: to,
         p_min_confidence: args.min_confidence,
         p_limit: args.limit ?? 50, p_offset: args.offset ?? 0, p_ascending: args.ascending,
+        p_card: args.card, p_sort: args.sort,
       }));
     },
   },
@@ -1156,7 +1159,7 @@ export const TOOLS = {
     readOnly: true,
     description: 'Credit card reward points (HSBC TravelOne): current balance, lifetime accrued and redeemed, and for a period the '
       + 'spend, points earned, points per ₹100, a month-by-month split, top merchants and past redemptions. The balance is always '
-      + 'lifetime; date_range only scopes the period figures. For what was bought, use search_events — this is the points view. '
+      + 'lifetime; date_range only scopes the period figures. For what was bought, use get_card_transactions; for milestones, get_card_year. This is the points view. '
       + 'Rows are now created automatically from card alerts: `assumed` counts rows whose label and multiplier were inferred from '
       + 'earlier spends at the same merchant and that he has not confirmed yet, so say the balance includes that many assumed points. '
       + 'range.work_spend is the part of the period spend he has marked as work. top_merchants are real merchants now, work or not.',
@@ -1164,6 +1167,50 @@ export const TOOLS = {
     handler: async (args) => {
       const range = args.date_range ? resolveDays(args.date_range) : { from: null, to: null };
       return rpc('finance_card_points', { p_from: range.from, p_to: range.to, p_user_id: await resolveUserId() });
+    },
+  },
+
+  get_card_year: {
+    readOnly: true,
+    description: 'The HSBC TravelOne card year: its dates, days left, net spend, work spend, and progress to the two spend '
+      + 'milestones (annual fee reversal and bonus points), with when each was reached. Use it for any question about '
+      + 'milestones, the fee, the anniversary or "how much have I spent this card year". Pass `on` for an earlier year. '
+      + 'HSBC decides what finally qualifies, so this is the ledger\'s tally, not the bank\'s.',
+    parameters: {
+      type: 'object',
+      properties: { on: { type: 'string', description: 'Any YYYY-MM-DD in the card year you want. Omit for the current one.' } },
+    },
+    handler: async args => rpc('cc_card_year', { p_on: args.on ?? null, p_user_id: await resolveUserId() }),
+  },
+
+  get_card_transactions: {
+    readOnly: true,
+    description: 'One card\'s transactions in short rows, largest first by default, with net_spend and total for the whole match. '
+      + 'The right tool for "biggest spends on my card" or "what did I buy on HSBC": it does the sorting, so do not page through '
+      + 'search_events or Fold for this. Omit `card` for the HSBC TravelOne points card, where no date_range means the current '
+      + 'card year and the totals match the Points page. Other cards take their last four digits and cover all history by default.',
+    parameters: {
+      type: 'object',
+      properties: {
+        card: { type: 'string', description: 'Last four digits. Omit for the points card.' },
+        date_range: DATE_RANGE,
+        query: { type: 'string', description: 'Matches his merchant name, the bank\'s name and the note.' },
+        min_amount: { type: 'number' },
+        is_work: { type: 'boolean', description: 'Points card only: true for work spend, false to leave it out.' },
+        sort: { type: 'string', enum: ['amount', 'date'], default: 'amount' },
+        ascending: { type: 'boolean', default: false },
+        limit: { type: 'integer', default: 25, description: 'At most 200.' },
+        offset: { type: 'integer', default: 0 },
+      },
+    },
+    handler: async (args) => {
+      const range = args.date_range ? resolveDays(args.date_range) : { from: null, to: null };
+      return rpc('ledger_card_transactions', {
+        p_card: args.card ?? null, p_from: range.from, p_to: range.to,
+        p_query: args.query ?? null, p_min_amount: args.min_amount ?? null, p_is_work: args.is_work ?? null,
+        p_sort: args.sort ?? 'amount', p_ascending: args.ascending ?? false,
+        p_limit: args.limit ?? 25, p_offset: args.offset ?? 0, p_user_id: await resolveUserId(),
+      });
     },
   },
 

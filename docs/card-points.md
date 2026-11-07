@@ -33,6 +33,17 @@ Always read `cc_points`, never `cc_transactions`, for date and amount.
 - **Any save confirms.** Editing a row, or adding a note to it, is looking at it.
 - **Auto-creation starts the day after the last typed row** (stored as `cc_auto_from`). Older unpaired alerts go to the Reconcile tab instead, because an old unpaired alert is as likely to be a typo on one side as a missed entry, and auto-creating it would double count.
 
+## The card year
+
+HSBC measures both spend milestones over an anniversary year from the account's open date: above ₹8L the annual fee is reversed, and above ₹12L there are 10,000 bonus points. Setting `cc_opened_on` holds the date, and `cc_card_year()` (`0033_card_year.sql`) is the one definition, used by the Points page and by Edith's `get_card_year`.
+
+- **Follows the card year:** the spend card, its progress bar and the transaction list, which defaults to the current year and has a picker.
+- **Stays lifetime:** the points balance, accrued and redeemed totals, reward rate and the charts.
+- **Review rows ignore the year.** "Review assumed rows" shows every row nobody has looked at.
+- **It is the ledger's tally.** Spend is net of refund rows on the page; a credit that has no Points row is not deducted. HSBC decides what finally qualifies.
+
+`get_card_transactions` lists one card's spend, largest first. The points card reads `cc_points`, so its total matches the page. Other cards read their events.
+
 ## Notes
 
 Every note follows one grammar, shown as the placeholder in the note box:

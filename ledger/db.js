@@ -98,13 +98,13 @@ export function jsonSafe(value) {
   return value;
 }
 
-// ledger_search_events takes fourteen arguments and PostgREST wants every one
-// of them named, so each caller used to spell all fourteen out. The defaults
+// ledger_search_events takes sixteen arguments and PostgREST wants every one
+// of them named, so each caller used to spell them all out. The defaults
 // live here; a caller passes only what it means.
 const SEARCH_DEFAULTS = {
   p_query: null, p_types: null, p_subtypes: null, p_statuses: null, p_source_types: null,
   p_entity_id: null, p_entity_name: null, p_from: null, p_to: null, p_min_confidence: null,
-  p_limit: 100, p_offset: 0, p_ascending: false,
+  p_limit: 100, p_offset: 0, p_ascending: false, p_card: null, p_sort: 'date',
 };
 
 /** Search a user's events. `overrides` are the p_-prefixed SQL arguments. */

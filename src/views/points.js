@@ -46,6 +46,9 @@ let searchTerm = '';
 let filterMultiplier = '';
 let filterPartner = '';
 let filterMerchant = '';
+// The card year on show: its first day, or 'all'. Empty means the current one.
+let filterYear = '';
+let cardYear = null;
 // A load that resolves after the user has left must not paint a dead DOM.
 let loadToken = 0;
 
@@ -68,6 +71,8 @@ export async function renderPoints(container) {
   filterMultiplier = '';
   filterPartner = '';
   filterMerchant = '';
+  filterYear = '';
+  cardYear = null;
   // The "Review assumed rows" filter is a module variable too, and it used to
   // survive leaving the page: coming back showed a filtered table with no
   // sign of why rows were missing.
@@ -265,13 +270,14 @@ async function loadData({ sync = true } = {}) {
   // cc_points is cc_transactions as it should be read: for a row linked to a
   // ledger event, the date and amount are the bank's, not a typed copy.
   // Rules and the reconcile lists are optional — the page stands without them.
-  let tx, rd, ruleRows, recon;
+  let tx, rd, ruleRows, recon, year;
   try {
-    [tx, rd, ruleRows, recon] = await Promise.all([
+    [tx, rd, ruleRows, recon, year] = await Promise.all([
       api.listTransactions(),
       api.listRedemptions(),
       api.listRules().catch(() => []),
       api.reconcile().catch(() => ({})),
+      api.cardYear(selectedYearOn()).catch(() => null),
       settings.ready(),
     ]);
   } catch (err) {
@@ -282,6 +288,7 @@ async function loadData({ sync = true } = {}) {
 
   transactions = tx || [];
   redemptions  = rd || [];
+  cardYear = year;
   eurRate = rate;
   rules = ruleRows || [];
   reconcile = { to_match: [], no_alert_found: [], events_without_row: [], settled: {}, ...(recon || {}) };
@@ -337,10 +344,79 @@ function renderSyncBanner() {
   document.getElementById('pt-go-reconcile')?.addEventListener('click', () => switchTab('reconcile'));
 }
 
+// ── Card year ──────────────────────────────────────────
+//
+// Spend against the milestones and the transaction list follow the card year.
+// The balance, the charts and the reward rate stay lifetime.
+
+/** The date to ask cc_card_year about: null is today, so also for "All time". */
+function selectedYearOn() {
+  return filterYear && filterYear !== 'all' ? filterYear : null;
+}
+
+/** The first and last day the list shows, or null for no limit. */
+function listedYear() {
+  if (filterYear === 'all' || !cardYear?.configured) return null;
+  return { from: cardYear.from, to: cardYear.to };
+}
+
+/** Rows in the listed year, before the other filters. */
+function rowsInYear() {
+  const year = listedYear();
+  // Review means every row nobody has looked at, whichever year it is in.
+  if (!year || filterBasis === 'assumed') return transactions;
+  return transactions.filter(t => t.date >= year.from && t.date <= year.to);
+}
+
+/** The spend card: this year against the bonus milestone. */
+function spendKpi(lifetimeSpend) {
+  const base = { id: 'pt-kpi-spent', icon: 'fa-cart-shopping', tone: 'accent' };
+  const lifetime = `Lifetime spend: ${formatINRFull(lifetimeSpend)}.`;
+  if (!cardYear?.configured) {
+    return {
+      ...base, label: 'Total spent', value: formatINRFull(lifetimeSpend), raw: lifetimeSpend,
+      sub: 'Set "Card opened on" in Settings to track the milestones',
+      tooltip: lifetime,
+    };
+  }
+  const spend = Number(cardYear.spend);
+  const bonus = cardYear.milestones.find(m => m.key === 'bonus_points');
+  const fee = cardYear.milestones.find(m => m.key === 'fee_waiver');
+  const target = Number(bonus.target);
+  const name = `${formatINR(target)} milestone`;
+  const ends = cardYear.is_current
+    ? `ends ${formatDate(cardYear.to)}, ${cardYear.days_left} ${cardYear.days_left === 1 ? 'day' : 'days'} left`
+    : `ended ${formatDate(cardYear.to)}`;
+  return {
+    ...base, label: 'Spent this card year', value: formatINRFull(spend), raw: spend,
+    progress: target > 0 ? Math.min((spend / target) * 100, 100) : 0,
+    sub: `${bonus.reached ? `${name} reached` : `${formatINRFull(Number(bonus.remaining))} to the ${name}`}; ${ends}`,
+    tooltip: `${formatDate(cardYear.from)} to ${formatDate(cardYear.to)}, net of refund rows. `
+      + `${formatINR(Number(fee.target))} reverses the annual fee: ${fee.reached ? 'reached' : `${formatINRFull(Number(fee.remaining))} to go`}. `
+      + `This is the ledger's tally; HSBC decides what qualifies. ${lifetime}`,
+  };
+}
+
+function cardYearLabel(y) {
+  return `${formatDate(y.from)} – ${formatDate(y.to)}`;
+}
+
+async function selectCardYear(value) {
+  filterYear = value;
+  filterMultiplier = '';
+  filterMerchant = '';
+  const token = loadToken;
+  const year = await api.cardYear(selectedYearOn()).catch(() => null);
+  if (token !== loadToken || !document.getElementById('pt-kpi-grid')) return;
+  cardYear = year;
+  renderKPIs();
+  renderTableFilters();
+  renderTxTable();
+}
+
 // ── KPI Cards ──────────────────────────────────────────
 function renderKPIs() {
   const POINTS_PER_EUR        = settings.get('points_per_eur');
-  const CC_MILESTONE_TARGET   = settings.get('cc_milestone_target');
   const CC_REWARD_TARGET_RATE = settings.get('cc_reward_target_rate');
 
   const {
@@ -354,19 +430,8 @@ function renderKPIs() {
     .filter(t => t.date?.slice(0,7) === thisMonth)
     .reduce((s, t) => s + calcPoints(t), 0);
 
-  const milestone = CC_MILESTONE_TARGET;
-  const progressPct = milestone > 0 ? (totalSpent / milestone) * 100 : 0;
-  const remaining = Math.max(milestone - totalSpent, 0);
-  const milestoneName = `${formatINR(milestone)} annual spend milestone`;
-
   const kpis = [
-    {
-      id: 'pt-kpi-spent', label: 'Total spent', icon: 'fa-cart-shopping', tone: 'accent', value: formatINRFull(totalSpent), raw: totalSpent,
-      progress: Math.min(progressPct, 100),
-      // Say which milestone: "Milestone reached" on its own named nothing.
-      sub: progressPct >= 100 ? `${milestoneName} reached` : `${formatINRFull(remaining)} to the ${milestoneName}`,
-      tooltip: 'Lifetime total INR spend on the HSBC TravelOne card.',
-    },
+    spendKpi(totalSpent),
     // The balance once in points and once in rupees (the Balance value card
     // below). This card also carried the rupee value and the EUR figure, so
     // the same balance was on screen three ways.
@@ -505,10 +570,17 @@ function renderTableFilters() {
   if (!container) return;
 
   if (activeTab === 'transactions') {
-    const multipliers = [...new Set(transactions.map(t => t.multiplier))].filter(v => v !== null && v !== undefined).sort((a, b) => a - b);
-    const merchants = [...new Set(transactions.map(t => t.merchant))].filter(Boolean).sort();
+    const inYear = rowsInYear();
+    const multipliers = [...new Set(inYear.map(t => t.multiplier))].filter(v => v !== null && v !== undefined).sort((a, b) => a - b);
+    const merchants = [...new Set(inYear.map(t => t.merchant))].filter(Boolean).sort();
+    const years = cardYear?.configured ? cardYear.years : [];
+    const currentFrom = years[0]?.from;
     
     container.innerHTML = `
+      ${years.length ? `<select id="pt-year-filter" class="form-select toolbar-select" aria-label="Card year">
+        ${years.map(y => `<option value="${escapeHTML(y.from)}" ${(filterYear || currentFrom) === y.from ? 'selected' : ''}>${escapeHTML(cardYearLabel(y))}</option>`).join('')}
+        <option value="all" ${filterYear === 'all' ? 'selected' : ''}>All time</option>
+      </select>` : ''}
       <select id="pt-multiplier-filter" class="form-select toolbar-select" aria-label="Filter by multiplier">
         <option value="">All Multipliers</option>
         ${multipliers.map(m => `<option value="${escapeHTML(m)}" ${filterMultiplier === String(m) ? 'selected' : ''}>${escapeHTML(m)}×</option>`).join('')}
@@ -519,6 +591,10 @@ function renderTableFilters() {
       </select>
     `;
     
+    document.getElementById('pt-year-filter')?.addEventListener('change', e => {
+      selectCardYear(e.target.value);
+    });
+
     document.getElementById('pt-multiplier-filter')?.addEventListener('change', e => {
       filterMultiplier = e.target.value;
       renderTxTable();
@@ -568,7 +644,7 @@ function switchTab(tab) {
 
 /** The transactions the table shows, under every active filter. */
 function filteredTransactions() {
-  let filtered = transactions;
+  let filtered = rowsInYear();
   if (filterBasis) {
     filtered = filtered.filter(t => t.basis === filterBasis);
   }
@@ -596,7 +672,7 @@ function renderTxTable() {
   txTable ??= createTable(container, {
     id: 'points-transactions',
     defaultSort: { key: 'date', dir: 'desc' },
-    empty: 'No transactions yet. Add one with the + button!',
+    empty: 'No transactions here yet. Add one with the + button!',
     columns: [
       { key: 'date', label: 'Date', type: 'date', render: t => escapeHTML(formatDate(t.date)) },
       { key: 'merchant', label: 'Merchant', render: merchantCell },
