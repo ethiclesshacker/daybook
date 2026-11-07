@@ -3979,6 +3979,15 @@ input, select, textarea {
 .dt-table th[data-stack] .dt-sort span { width: min-content; text-align: inherit; line-height: 1.25; }
 .dt-table th[data-stack][data-align="end"] .dt-sort span { text-align: right; }
 
+/* Net worth has thirteen columns to fit in one card. Half the usual gap between
+   them, keeping the outer edges in line with the rest of the card. The sort
+   button borrows the narrower gap too, so it adds no width of its own. */
+#nw-table-container .dt-table th:not(:first-child),
+#nw-table-container .dt-table td:not(:first-child) { padding-left: var(--sp-2); }
+#nw-table-container .dt-table th:not(:last-child),
+#nw-table-container .dt-table td:not(:last-child) { padding-right: var(--sp-2); }
+#nw-table-container .dt-table th[data-align="end"] .dt-sort { margin-left: calc(-1 * var(--sp-2)); }
+
 /* ---------- Reconcile: the collapsed list says it opens ---------- */
 .pt-rc-details > summary { list-style: none; }
 .pt-rc-details > summary::-webkit-details-marker { display: none; }
