@@ -215,7 +215,7 @@ function openQuestions(events, needsReview, scheduled) {
   // A purchase whose only evidence is a card alert has an amount but no idea
   // what was bought.
   for (const event of events) {
-    if (event.type === 'purchase' && event.subtype === 'card_transaction'
+    if (event.type === 'purchase' && ['card_transaction', 'upi_payment'].includes(event.subtype)
         && event.source_count === 1 && !event.data?.order_id) {
       questions.push({
         event_id: event.id,
