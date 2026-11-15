@@ -1156,19 +1156,49 @@ const SENDER_RULES = [
       // handle and as a person or business. Parsed first because it is the
       // better source: the card-descriptor pattern below cannot cross the '@'
       // in a handle, so on UPI alerts it captures "VPA uber" or nothing.
-      const vpa = text.match(/\bVPA\s+(\S+@\S+?)\s*(?:\(([^)]{2,60})\))?/i);
+      // The handle runs to the end of its domain; a lazy \S+? stopped inside it
+      // ("*****yavs@s"), so the bracketed name was never read.
+      const vpa = text.match(/\bVPA\s+(\S+@[A-Za-z0-9.-]*[A-Za-z0-9])\s*(?:\(([^)]{2,60})\))?/i);
       const vpaHandle = vpa ? vpa[1] : null;
       const vpaName = vpa && vpa[2] ? vpa[2].trim() : null;
 
+      // The payee is only ever in the alert itself. Banks pad it with marketing
+      // and help text, and HDFC's IMPS alert ends "BillPay, a bill payment
+      // facility applicable to Debit and Credit cards" — searched whole, that
+      // "to Debit and Credit cards" became the merchant of a ₹1.25 L transfer.
+      const core = alertCore(text);
+
       // Non-greedy, with an explicit stop: a card descriptor runs straight
       // into " on 18/08/26", which a greedy capture swallows into the name.
-      const at = text.match(
+      const at = core.match(
         /\b(?:at|to|towards|in favou?r of)\s+([A-Z0-9][A-Za-z0-9 .&'*-]{1,40}?)(?=\s*(?:[.,;!|\n]|\bon\b\s*\d|\bwith\b|\bfor\b|\bavailable\b|$))/);
       // HDFC's netbanking notice: "for a transfer to payee ADITYA VIKRAM SINGHANIA8409
       // using HDFC Bank Online Banking." The lowercase "payee" defeats the pattern
       // above, which then finds the "to 7308080808" in the SMS-to-block footer.
-      const namedPayee = text.match(/\btransfer\s+to\s+payee\s+(.{2,60}?)(?=\s+using\b|\s*[.,;\n]|$)/i);
-      const payeeRaw = namedPayee ? namedPayee[1].trim() : at ? at[1].replace(/\s+on$/i, '').trim() : null;
+      const namedPayee = core.match(/\btransfer\s+to\s+payee\s+(.{2,60}?)(?=\s+using\b|\s*[.,;\n]|$)/i);
+      // slice lays the payee out as a label line and a value line:
+      // "₹330 debited from your slice account xx8409 via UPI. … To\nBMTC\nRRN …"
+      const toLine = core.match(/^[ \t]*To[ \t]*\n[ \t]*([A-Za-z0-9][^\n]{1,59}?)[ \t]*$/m);
+      const payeeRaw = namedPayee ? namedPayee[1].trim()
+                     : toLine ? toLine[1].trim()
+                     : at ? at[1].replace(/\s+on$/i, '').trim() : null;
+
+      // "debited from your account ending …9768 … and credited to the account
+      // ending …8409 via IMPS" names no payee at all, only where the money went.
+      const toAccountMatch = core.match(/\bcredited\s+to\s+(?:the\s+|your\s+)?(?:a\/c|account)\s+(?:no\.?\s*)?(?:ending\s+(?:with\s+)?)?[x*X]*(\d{4})\b/i);
+      const beneficiaryAcc = core.match(/\bbeneficiary\s+(?:a\/c|acc(?:ount)?)\.?\s*(?:no\.?|number)?\s*[:.]?\s*[x*X]*(\d{4})\b/i);
+      const toAccount = toAccountMatch ? toAccountMatch[1] : beneficiaryAcc ? beneficiaryAcc[1] : null;
+      const beneficiaryName = (core.match(/\bbeneficiary\s+name\s*[:.]?\s*([A-Za-z][A-Za-z .'-]{1,59}?)\s*(?:\n|\bbeneficiary\b|$)/i) || [])[1] || null;
+
+      // How the money moved, from the alert's own words. Debited from a card →
+      // a card transaction, whatever network carried it (RuPay on UPI is still
+      // the card); from an account → UPI, IMPS, NEFT or RTGS. Unstated stays a
+      // card transaction, as before.
+      const fromCard = /\b(?:credit|debit)\s+card\b|\bcard\s+(?:no\.?\s*)?(?:ending|xx|\*)/i.test(core);
+      const railWord = (core.match(/\b(?:via|using|through|by)\s+(UPI|IMPS|NEFT|RTGS)\b/i) || [])[1]
+                    || (vpaHandle || /\bUPI\b/i.test(core) ? 'UPI' : null)
+                    || (core.match(/\b(IMPS|NEFT|RTGS)\b/) || [])[1] || null;
+      const rail = railWord ? railWord.toUpperCase() : null;
 
       // "Credited to beneficiary A/c ending XX8409" is the bank confirming money
       // you sent has landed. It reads like a credit and is not one: filed as
@@ -1178,7 +1208,11 @@ const SENDER_RULES = [
       // Moving money between your own accounts is not spending. Left as a
       // purchase it shows up in the timeline as a shop you never visited, and
       // is added to every total you look at.
-      const selfTransfer = isSelfPayee([vpaHandle, vpaName, payeeRaw], ctx.selfIdentifiers);
+      // Own accounts are the all-digit entries of ledger_self_identifiers
+      // (their last four digits): an alert that only says "credited to the
+      // account ending 8409" can be recognised no other way.
+      const selfTransfer = isSelfPayee([vpaHandle, vpaName, payeeRaw, beneficiaryName], ctx.selfIdentifiers)
+                        || Boolean(toAccount && ownAccountTails(ctx.selfIdentifiers).includes(toAccount));
 
       const payee = vpaName || payeeRaw || (vpaHandle ? vpaHandle.split('@')[0] : null);
       // A gateway in the payee slot is how it was paid, not where.
@@ -1201,6 +1235,21 @@ const SENDER_RULES = [
       const cardBill = !credit && !selfTransfer && !sentNotice && isCardBillPayment(`${m.subject || ''}\n${text}`, [payee, vpaHandle]);
       const food = !credit && !selfTransfer && !cardBill && !sentNotice && isFoodMerchant(merchant, ctx.foodMerchants);
 
+      // How it was paid. A card stays `card_transaction` (the merge rules and the
+      // Points page lean on it); an account debit says its rail. Before this,
+      // every UPI and IMPS debit was filed as a "Card transaction".
+      const spendSubtype = fromCard || !rail ? 'card_transaction'
+                         : rail === 'UPI' ? 'upi_payment'
+                         : 'payment';
+      const fromWhat = card ? `${fromCard ? 'card' : 'account'} ending ${card[1]}` : (fromCard ? 'card' : null);
+      const paymentMethod = fromCard ? (fromWhat || 'card')
+                          : rail ? [rail, fromWhat].filter(Boolean).join(' · ')
+                          : (fromWhat || 'card');
+      const unnamedSpend = toAccount && rail && rail !== 'UPI' ? `${rail} to account ending ${toAccount}`
+                         : rail === 'UPI' && !fromCard ? 'UPI payment'
+                         : rail && !fromCard ? `${rail} transfer`
+                         : 'Card transaction';
+
       return withKeys({
         // Neither a credit nor a self-transfer is a purchase. Filing either as
         // one adds it to every spend total, so both become transfers. Nor is
@@ -1210,7 +1259,7 @@ const SENDER_RULES = [
                : sentNotice ? 'bank_transfer'
                : cardBill ? 'card_bill_payment'
                : credit ? (/\brefund/i.test(text) ? 'refund' : 'credit')
-               : 'card_transaction',
+               : spendSubtype,
         title: selfTransfer
           ? `Transfer to own account — ${formatMoney(money.amount, money.currency)}`
           : sentNotice
@@ -1219,7 +1268,7 @@ const SENDER_RULES = [
             ? `Card bill payment — ${formatMoney(money.amount, money.currency)}`
           : credit
             ? `${merchant?.name || issuerName(m)} ${/\brefund/i.test(text) ? 'refund' : 'credit'} — ${formatMoney(money.amount, money.currency)}`
-            : `${merchant?.name || 'Card transaction'} — ${formatMoney(money.amount, money.currency)}`,
+            : `${merchant?.name || unnamedSpend} — ${formatMoney(money.amount, money.currency)}`,
         occurred_at: occurred,
         data: prune({
           merchant: (selfTransfer || sentNotice) ? null : (merchant?.name || null),
@@ -1227,7 +1276,8 @@ const SENDER_RULES = [
           direction: credit ? 'credit' : 'debit',
           vpa: vpaHandle,
           counterparty: selfTransfer ? 'self' : (vpaName || null),
-          payment_method: card ? `card ending ${card[1]}` : 'card',
+          payment_method: paymentMethod,
+          to_account: toAccount ? `account ending ${toAccount}` : null,
           account: card ? card[1] : null,
           transaction_id: ref,
           issuer: issuer?.name || null,
@@ -1502,10 +1552,33 @@ export function isCardBillPayment(text, payees = []) {
   return payees.filter(Boolean).some(p => CARD_BILL_PAYEE.test(String(p).trim().split('@')[0].trim()));
 }
 
+// The alert proper, without the marketing and help text banks append to it.
+// Cut at the first footer marker; the alert sentence always comes before them.
+const ALERT_FOOTER = /\n[ \t]*(?:did you know|need help|warm regards|regards,?|best,|for more details|digital safety|to talk to us|not you\?|this is a system[- ]generated|please do not reply)\b/i;
+export function alertCore(text = '') {
+  // htmlToText keeps the mail's CRLFs (" To \r\n BMTC \r\n"); line-based
+  // patterns below expect bare \n.
+  const plain = String(text).replace(/\r/g, '');
+  const cut = plain.search(ALERT_FOOTER);
+  return cut > 0 ? plain.slice(0, cut) : plain;
+}
+
+// Your own accounts, as last-four digits: the all-digit entries of
+// ledger_self_identifiers ("aadityavs, Aditya Vikram Singhania, 9768, 8409").
+export function ownAccountTails(selfIdentifiers = []) {
+  return (selfIdentifiers || [])
+    .map(id => String(id).replace(/\s+/g, ''))
+    .filter(id => /^\d{4,}$/.test(id))
+    .map(id => id.slice(-4));
+}
+
 export function isSelfPayee(candidates, selfIdentifiers = []) {
   if (!selfIdentifiers?.length) return false;
 
+  // Account numbers are matched by ownAccountTails, never as a name: "8409"
+  // inside a merchant's descriptor must not make a purchase a self-transfer.
   const mine = selfIdentifiers
+    .filter(id => !/^\s*\d+\s*$/.test(String(id)))
     .map(id => normalizeName(String(id)))
     .filter(id => id && id.length >= 4);
   if (!mine.length) return false;
@@ -1589,7 +1662,14 @@ function icsPayloads(message) {
  * an event. Work mail becomes a source row and nothing more unless a rule or
  * the model finds a real activity in it.
  */
+// Zero-width characters some banks put inside numbers: slice writes
+// "₹2,\u200c98,\u200c000", which read as ₹2 — six-figure transfers were filed as ₹2.
+const INVISIBLE = /[\u200B-\u200D\u2060\uFEFF]/g;
+
 export function extractDeterministic(message, ctx = {}) {
+  message = { ...message,
+    text: typeof message.text === 'string' ? message.text.replace(INVISIBLE, '') : message.text,
+    subject: typeof message.subject === 'string' ? message.subject.replace(INVISIBLE, '') : message.subject };
   const fingerprint = senderFingerprint(message);
 
   const from = message.from?.address

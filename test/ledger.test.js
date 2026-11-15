@@ -23,6 +23,7 @@ import { dedupeKey, deriveDedupeKey } from '../src/ledger/dedupe.js';
 import {
   triage, extractJsonLd, fromSchemaOrg, parseICS, fromICS, icsToISO,
   extractDeterministic, senderFingerprint, htmlToText, withKeys,
+  isSelfPayee, ownAccountTails, alertCore,
 } from '../src/ledger/email.js';
 import { parseOrderItems, summariseItems, dishName, mealTitle, retitleForItems } from '../src/ledger/items.js';
 import { collapseParcels, visibleEvents, eventTitle, eventMerchant } from '../src/ledger/timeline.js';
@@ -800,6 +801,87 @@ test('a UPI payee is read from the VPA name', () => {
 
   assert.equal(extraction.data.merchant, 'Uber');
   assert.equal(extraction.data.amount, 149);
+});
+
+// Real shapes, 15 Nov 2026: an IMPS between two of his own accounts was filed
+// as a ₹1.25 L "Debit And Credit Cards" card purchase (the merchant came from
+// HDFC's BillPay footer), and every slice UPI debit as a "Card transaction".
+const HDFC_IMPS = 'Dear Customer,\nGreetings from HDFC Bank!\nINR 1,24,910.00 has been debited from your account ending '
+  + 'xxxxxxxxxx9768 on 15-11-26 and credited to the account ending xxxxxxxxxx8409 via IMPS.\nIMPS Reference No: 631931644831\n'
+  + 'Available Balance: INR 1,000.00\nDid you know?\nYou can pay your utility bills automatically using BillPay, a bill payment '
+  + 'facility applicable to Debit and Credit cards.\nNeed Help?\nWarm Regards,\nHDFC Bank';
+const SLICE = { name: 'slice', address: 'noreply@slice.bank.in' };
+const sliceUpi = (amount, payee) => extractDeterministic({
+  subject: `₹${amount} debited from your slice account`, date: new Date('2026-11-15T17:30:24Z'), from: SLICE, to,
+  text: `Hi Aditya,\n₹${amount} debited from your slice account xx8409 via UPI.\nTransaction date\n15-Nov-26\nTo\n${payee}\nRRN\n631901799612\nBest,\nTeam slice`,
+}, { ...SELF, selfIdentifiers: ['aadityavs', 'Aditya Vikram Singhania', '9768', '8409'] }).extractions[0];
+
+test('an IMPS to your own account is a self-transfer, and the footer is not a merchant', () => {
+  const extraction = hdfc(HDFC_IMPS, { selfIdentifiers: ['aadityavs', 'Aditya Vikram Singhania', '9768', '6016', '8409'] });
+  assert.equal(extraction.type, 'transfer');
+  assert.equal(extraction.subtype, 'self_transfer');
+  assert.equal(extraction.data.merchant, undefined);
+  assert.equal(extraction.data.account, '9768');
+  assert.match(extraction.data.payment_method, /^IMPS · account ending 9768$/);
+  assert.equal(isInflow(extraction), true);           // kept out of spend totals
+});
+
+test('an IMPS to someone else stays spending, says IMPS, and still has no footer merchant', () => {
+  const extraction = hdfc(HDFC_IMPS, { selfIdentifiers: ['Aditya Vikram Singhania', '9768'] });
+  assert.equal(extraction.type, 'purchase');
+  assert.equal(extraction.subtype, 'payment');
+  assert.equal(extraction.data.merchant, undefined);
+  assert.match(extraction.title, /^IMPS to account ending 8409 — /);
+  assert.equal(isInflow(extraction), false);
+});
+
+test('a slice UPI debit is a UPI payment to the payee on the line after "To"', () => {
+  const extraction = sliceUpi(330, 'BMTC');
+  assert.equal(extraction.subtype, 'upi_payment');
+  assert.match(extraction.data.merchant, /bmtc/i);
+  assert.equal(extraction.data.payment_method, 'UPI · account ending 8409');
+  assert.equal(extraction.data.amount, 330);
+  assert.equal(isInflow(extraction), false);
+});
+
+test('the slice payee survives the CRLF layout htmlToText really produces', () => {
+  const [extraction] = extractDeterministic({
+    subject: '₹330 debited from your slice account', date: new Date('2026-11-15T17:30:24Z'), from: SLICE, to,
+    text: 'Hi Aditya, \r\n\n ₹330 debited from your slice account xx8409 via UPI.\r\n\n Transaction date \r\n 15-Nov-26 \r\n\n'
+        + ' To \r\n BMTC \r\n\n RRN \r\n 631901799612 \r\n\n Best,\n\r\n Team slice \r\n \n Digital safety tips',
+  }, { ...SELF, selfIdentifiers: ['aadityavs'] }).extractions;
+  assert.equal(extraction.subtype, 'upi_payment');
+  assert.match(extraction.data.merchant, /bmtc/i);
+});
+
+test('a masked UPI handle still yields its bracketed name, so a self-transfer is caught', () => {
+  const extraction = hdfc('Rs.459.71 is debited from your account ending 9768 towards VPA *****yavs@slc (MR ADITYA VIKRAM SINGHANIA) on 27-10-26.\n\n'
+    + 'UPI transaction reference no.: 630014961304.', { selfIdentifiers: ['Aditya Vikram Singhania'] });
+  assert.equal(extraction.subtype, 'self_transfer');
+  assert.equal(isInflow(extraction), true);
+});
+
+test('zero-width characters inside an amount do not shrink ₹2,98,000 to ₹2, and a beneficiary account is read', () => {
+  const [extraction] = extractDeterministic({
+    subject: 'Your IMPS transaction is successful!', date: new Date('2026-05-21T10:00:00Z'), from: SLICE, to,
+    text: 'IMPS transaction of ₹2,\u200c98,\u200c000 from your slice bank a/c xx8409 is successful!\nTransaction Date\n21-May-26\n'
+        + 'Beneficiary Name\nADITYA SINGHANIA\nBeneficiary Acc No.\nxx9768\nBeneficiary Bank\nHDFC Bank\nIMPS Ref No.\n614103377326',
+  }, { ...SELF, selfIdentifiers: ['Aditya Singhania', '9768', '8409'] }).extractions;
+  assert.equal(extraction.data.amount, 298000);
+  assert.equal(extraction.subtype, 'self_transfer');
+});
+
+test('a card alert is still a card transaction', () => {
+  const extraction = hdfc('Rs.1299.00 has been debited from your HDFC Bank Credit Card ending 4321 at AMAZON PAY INDIA on 20-08-2026.');
+  assert.equal(extraction.subtype, 'card_transaction');
+  assert.equal(extraction.data.payment_method, 'card ending 4321');
+});
+
+test('an account number among your identifiers never matches a merchant name', () => {
+  assert.equal(isSelfPayee(['M S GUPTA 8409 STORES'], ['8409']), false);
+  assert.deepEqual(ownAccountTails(['aadityavs', '9768', ' 50100012348409 ']), ['9768', '8409']);
+  assert.match(alertCore(HDFC_IMPS), /via IMPS/);
+  assert.doesNotMatch(alertCore(HDFC_IMPS), /Debit and Credit cards/);
 });
 
 test('a card-benefits mailer is not a transaction', () => {
